@@ -1,4 +1,4 @@
-# Data Representation
+# Internal Data Representation
 
 What does Comp see when you instantiate, say, an Integer? All Comp data is stored in WASM memory, which is like a big array that holds nothing but numbers. Here's what is stored for the Integer 7 (each pair of hexadecimal digits represents a byte):
 
