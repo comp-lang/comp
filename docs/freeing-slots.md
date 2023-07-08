@@ -1,4 +1,4 @@
-# Low-Level Memory Management
+# Internal Memory Management
 
 So if Nil is stored at address 0 and False at 260, what's in between? Addresses 4-256 are used for memory management. Let's call them slot registers.
 
