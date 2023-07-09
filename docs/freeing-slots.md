@@ -18,7 +18,7 @@ The next time we create a 16-byte value, we'll load 1040 from slot register 16, 
 
 This way, we maintain a chain from the first freed slot to the most recent one. If A is the most recently freed 16-byte slot, its address is stored at slot register 16. If B was freed before A, its address is stored in A. If C was freed before B, its address is stored in B, and so on.
 
-(FYI we're using WASM atomic operations to swap the values in slot register 16 so multiple threads can free slots without race conditions. We'll talk more about threads much later).
+(BTW we're using WASM atomic operations to swap the values in slot register 16 so multiple threads can free slots without race conditions. We'll talk more about threads much later).
 
 Each type uses the slot register corresponding to its size — register 4 for 4-byte values, register 8 for 8-byte values, and so on, up to the maximum of 256.
 
