@@ -4,20 +4,28 @@
 
 We've already discussed one part of the allocation process: check the slot register (4-256) corresponding to the type size to see if there is an available freed slot.
 
-When there's not, the next step is to reserve a new slot at the end of the globally used memory. We keep track of this location at address 268 (right after True). We'll call this the next-address register.
+When there's not (i.e. when the slot register contains 0), the next step is to reserve the next available address in memory. We keep track of this at address 268 (right after True). We'll call this the next-address register.
 
-Address 272 is used to keep track of the starting byte of the last page in memory (each page of WASM memory is 2^16 bytes, and you can have a maximum of 2^16 pages, or 2^32 bytes in total). We'll call this the page-start register.
+Address 272 is used to keep track of the total number of bytes currently available in memory. We'll call this the avail-mem register. More on this below.
 
-So initially, the value stored in the next-address register is 276 (right after the page-start register).
+So initially, the value stored in the next-address register is 276 (the address after the avail-mem register).
 
 If we want to instantiate a new Integer, we'll check slot register 16, find that its value is zero (since no slots were previously freed), then check the next-address register and find that its value is 276. This is where we'll store the new Integer.
 
-Now we need to increase the next-address register by 16 so that the next value created will be stored after the Integer. Comp is designed to be thread-safe from the ground up, so we have to assume that multiple threads could be trying to do this simultaneously. We can't allow any gap between reading and updating the value of the next-address register.
+Now we need to increase the value of the next-address register by 16 so that any data instantiated after the Integer will be stored at address 292.
 
-Therefore, we do both at once using WASM's i32.atomic.rmw.add operation. This op adds to the value stored in the next-address register and then returns the previous value, so by the time we know the next available address is 276, we've already increased the value of the next-address register to 292. The atomic operation forces all other threads to wait, so when the next thread accesses the next-address register, it will read 292, and there will be no conflict.
+Before proceeding, we need to make sure this addition does not overflow the 32-bit address space. The new address should always be greater than the previous value of next-address (if the addition overflows, the answer will wrap around to zero). If not, then we have run out of memory and throw an exception.
 
-Now we know that 16 bytes have been reserved at address 276, and we can safely store the new Integer there.
+Then we must check if we need to add memory to hold the instantiated data. Comp starts out with only one page (64 Kib) of WASM memory, which is expanded as needed.
 
-Eventually, we're going to increase next-address to the point that we need to grow the memory. Initially, Comp starts with a single page of memory (2^16 bytes, or 64 Kib). When we increase next-address as described above, we need to check the new value to see if it goes past the end of currently available memory.
+To do this, we compare the new address to the value of the avail-mem register. If the new address is greater than or equal to avail-mem, then we need to expand memory to fit the instantiated data.
 
-There are actually two checks we need to perform.
+The maximum size of WASM memory is 2^32 bytes or 4 GiB, but we already checked above that we have not exceeded that amount, so we are safe to grow the memory as needed at this point.
+
+Each step of this process is conducted in a thread-safe manner without locking, using atomic operations and loops. See the internal `get_next_address` function for details.
+
+Let's conclude by reviewing what happens when there is a previously freed slot available. We need to load the address in the slot register, and if it's not zero, then load the value in *that* address and store it in the slot register.
+
+This is a multi-step process. How do we prevent other threads from loading the same address from the slot register while continuing the other steps?
+
+We load the address from the slot register using the `i32.atomic.rmw.xchg` operation, which allows us to atomically store zero at that address and read the prior value from it simultaneously. Thus, if another thread tries to read from that slot register, it will read zero and proceed as if there are no freed slots. Once the next freed slot in the chain is stored in the slot register, then another thread can safely use it.
