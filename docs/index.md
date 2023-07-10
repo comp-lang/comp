@@ -6,3 +6,4 @@ From a user perspective, Comp is very similar to Clojure. But it is built from t
 2. Memory Management
     - (a) [Freeing Slots](freeing-slots)
     - (b) [Allocating Slots](allocating-slots)
+    - (c) [Reference Counting](reference-counting)
