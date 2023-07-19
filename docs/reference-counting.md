@@ -29,3 +29,5 @@ You can think of this being expanded to something like this:
 ```
 
 `b` and `c` are freed, but not `d`, because it's the return value.
+
+When Comp compiles a function, it maintains an array of all local values that need to be freed at the end.
