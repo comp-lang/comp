@@ -1,6 +1,8 @@
 blah
 .pat
 
+*.swp
+
 # Logs
 logs
 *.log
