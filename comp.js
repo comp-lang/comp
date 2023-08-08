@@ -1944,29 +1944,10 @@ define_type(
   "refs", "i32", 1, 0, 0,
   "flags", "i32", 1, 1, 0,
   "hash", "i32", 1, 0, 0,
-  "count", "i32", 0, 0, wasm.i64,
-  "vec", "i32", 0, 0, wasm.i32,
-  "offset", "i32", 0, 0, 0
-);
-
-define_type(
-  "ChunkedSeq",
-  "refs", "i32", 1, 0, 0,
-  "flags", "i32", 1, 1, 0,
-  "hash", "i32", 1, 0, 0,
   "arr", "i32", 0, 0, 0,
   "arr_off", "i32", 0, 0, 0,
-  "root_off", "i32",  0, 0, 0,
-  "root", "i32", 0, 0, 0
-);
-
-define_type(
-  "ConcatSeq",
-  "refs", "i32", 1, 0, 0,
-  "flags", "i32", 1, 1, 0,
-  "hash", "i32", 1, 0, 0,
-  "left", "i32", 0, 0, wasm.i32,
-  "right", "i32", 0, 0, wasm.i32
+  "vec", "i32", 0, 0, wasm.i32,
+  "vec_off", "i32", 0, 0, 0
 );
 
 define_type(
@@ -3375,8 +3356,31 @@ const get = pre_new_method("get", 3),
 |     |
 \*---*/
 
-const empty_vector = comp.Vector(0, 5, empty_refs_array, empty_refs_array),
-      empty_seq = comp.Seq(comp.VectorSeq(0, empty_vector, 0));
+const empty_seq = comp.Seq(nil);
+
+count.implement(types.Nil, function (func) {
+  func.param(wasm.i32);
+  func.add_result(wasm.i32);
+  func.append_code(wasm.i32$const, 0);
+});
+
+nth.implement(types.Nil, function (func) {
+  func.param(wasm.i32, wasm.i32, wasm.i32);
+  func.add_result(wasm.i32);
+  func.append_code(wasm.i32$const, nil);
+});
+
+first.implement(types.Nil, function (func) {
+  func.param(wasm.i32);
+  func.add_result(wasm.i32);
+  func.append_code(wasm.i32$const, nil);
+});
+
+rest.implement(types.Nil, function (func) {
+  func.param(wasm.i32);
+  func.add_result(wasm.i32);
+  func.append_code(wasm.i32$const, ...leb128(empty_seq));
+});
 
 // todo: will this work for user-defined seqs?
 impl_free(types.Seq, function (func) {
@@ -3424,99 +3428,14 @@ impl_seq_pass_through(types.Seq, first);
 impl_seq_pass_through(types.Seq, nth);
 impl_seq_pass_through(types.Seq, rest, true);
 
-const seq_append = func_builder(function (func) {
-  const seq = func.param(wasm.i32),
-        val = func.param(wasm.i32);
-  func.add_result(wasm.i32);
-  func.append_code(
-    wasm.local$get, ...seq,
-    wasm.call, ...types.Seq.fields.root.leb128,
-    wasm.local$get, ...val,
-    wasm.call, ...conj.func_idx_leb128,
-    wasm.call, ...types.Seq.constr.leb128
-  );
-});
-
-/*----------*\
-|            |
-| ChunkedSeq |
-|            |
-\*----------*/
-
-impl_seq_pass_through(types.ChunkedSeq, count);
-impl_seq_pass_through(types.ChunkedSeq, nth);
-
-impl_free(types.ChunkedSeq, function (func) {
-  const seq = func.param(wasm.i32);
-  func.add_result(wasm.i32);
-  func.append_code(
-    wasm.local$get, ...seq,
-    wasm.call, ...types.ChunkedSeq.fields.root.leb128,
-    wasm.call, ...free.func_idx_leb128,
-    wasm.i32$const, 1
-  );
-});
-
-first.implement(types.ChunkedSeq, function (func) {
-  const seq = func.param(wasm.i32);
-  func.add_result(wasm.i32);
-  func.append_code(
-    wasm.local$get, ...seq,
-    wasm.call, ...types.ChunkedSeq.fields.arr.leb128,
-    wasm.local$get, ...seq,
-    wasm.call, ...types.ChunkedSeq.fields.arr_off.leb128,
-    wasm.call, ...refs_array_get.func_idx_leb128
-  );
-});
-
-rest.implement(types.ChunkedSeq, function (func) {
-  const seq = func.param(wasm.i32),
-        root = func.local(wasm.i32),
-        root_off = func.local(wasm.i32),
-        arr_off = func.local(wasm.i32),
-        arr = func.local(wasm.i32);
-  func.add_result(wasm.i32);
-  func.append_code(
-    wasm.local$get, ...seq,
-    wasm.call, ...types.ChunkedSeq.fields.root.leb128,
-    wasm.local$set, ...root,
-    wasm.local$get, ...seq,
-    wasm.call, ...types.ChunkedSeq.fields.root_off.leb128,
-    wasm.local$set, ...root_off,
-    wasm.local$get, ...seq,
-    wasm.call, ...types.ChunkedSeq.fields.arr_off.leb128,
-    wasm.i32$const, 1,
-    wasm.i32$add,
-    wasm.local$tee, ...arr_off,
-    wasm.local$get, ...seq,
-    wasm.call, ...types.ChunkedSeq.fields.arr.leb128,
-    wasm.call, ...types.RefsArray.fields.arr.leb128,
-    wasm.local$tee, ...arr,
-    wasm.call, ...types.Array.fields.length.leb128,
-    wasm.i32$lt_u,
-    wasm.if, wasm.i32,
-      // arr is still in root, so it doesn't need inc_refs
-      wasm.local$get, ...arr,
-      wasm.local$get, ...arr_off,
-      wasm.local$get, ...root_off,
-      wasm.local$get, ...root,
-      wasm.call, ...inc_refs.func_idx_leb128,
-      wasm.call, ...types.ChunkedSeq.constr.leb128,
-    wasm.else,
-      wasm.local$get, ...root_off,
-      wasm.local$get, ...root,
-      // root needs to be inc_ref'd in here
-      wasm.call, ...next_chunked_seq.func_idx_leb128,
-    wasm.end
-  );
-});
-
 /*------*\
 |        |
 | Vector |
 |        |
 \*------*/
 
+const empty_vector = comp.Vector(0, 5, empty_refs_array, empty_refs_array);
+      
 impl_free(types.Vector, function (func) {
   const vec = func.param(wasm.i32);
   func.add_result(wasm.i32);
@@ -4002,7 +3921,14 @@ count.implement(types.VectorSeq, function (func) {
   func.add_result(wasm.i32);
   func.append_code(
     wasm.local$get, ...seq,
-    wasm.call, ...types.VectorSeq.fields.count.leb128
+    wasm.call, ...types.VectorSeq.fields.vec.leb128,
+    wasm.call, ...count.func_idx_leb128,
+    wasm.local$get, ...seq,
+    wasm.call, ...types.VectorSeq.fields.vec_off.leb128,
+    wasm.i32$sub,
+    wasm.local$get, ...seq,
+    wasm.call, ...types.VectorSeq.fields.arr_off.leb128,
+    wasm.i32$sub
   );
 });
 
@@ -4013,16 +3939,17 @@ conj.implement(types.VectorSeq, function (func) {
   func.add_result(wasm.i32);
   func.append_code(
     wasm.local$get, ...seq,
+    wasm.call, ...types.VectorSeq.fields.arr.leb128,
+    wasm.local$get, ...seq,
+    wasm.call, ...types.VectorSeq.fields.arr_off.leb128,
+    wasm.local$get, ...seq,
     wasm.call, ...types.VectorSeq.fields.vec.leb128,
     wasm.local$get, ...val,
     wasm.call, ...conj.func_idx_leb128,
-    wasm.local$tee, ...vec,
     // no inc_refs because the new vec is never meant to
     // be referenced outside the seq
-    wasm.call, ...types.Vector.fields.count.leb128,
-    wasm.local$get, ...vec,
     wasm.local$get, ...seq,
-    wasm.call, ...types.VectorSeq.fields.offset.leb128,
+    wasm.call, ...types.VectorSeq.fields.vec_off.leb128,
     wasm.call, ...types.VectorSeq.constr.leb128
   );
 });
@@ -4036,7 +3963,7 @@ nth.implement(types.VectorSeq, function (func) {
     wasm.local$get, ...seq,
     wasm.call, ...types.VectorSeq.fields.vec.leb128,
     wasm.local$get, ...seq,
-    wasm.call, ...types.VectorSeq.fields.offset.leb128,
+    wasm.call, ...types.VectorSeq.fields.vec_off.leb128,
     wasm.local$get, ...n,
     wasm.i32$add,
     wasm.local$get, ...not_found,
@@ -4049,34 +3976,64 @@ first.implement(types.VectorSeq, function (func) {
   func.add_result(wasm.i32);
   func.append_code(
     wasm.local$get, ...seq,
-    wasm.i32$const, 0,
-    wasm.i32$const, nil,
-    wasm.call, ...nth.func_idx_leb128
+    wasm.call, ...types.VectorSeq.fields.arr.leb128,
+    wasm.local$get, ...seq,
+    wasm.call, ...types.VectorSeq.fields.arr_off.leb128,
+    wasm.call, ...refs_array_get.func_idx_leb128
   );
 });
 
 rest.implement(types.VectorSeq, function (func) {
   const seq = func.param(wasm.i32),
-        cnt = func.local(wasm.i32);
+        len = func.local(wasm.i32),
+        arr = func.local(wasm.i32),
+        arr_off = func.local(wasm.i32),
+        vec = func.local(wasm.i32),
+        vec_off = func.local(wasm.i32);
   func.add_result(wasm.i32);
   func.append_code(
     wasm.local$get, ...seq,
-    wasm.call, ...types.VectorSeq.fields.count.leb128,
-    wasm.local$tee, ...cnt,
+    wasm.call, ...count.func_idx_leb128,
     wasm.i32$const, 1,
     wasm.i32$gt_u,
     wasm.if, wasm.i32,
-      wasm.local$get, ...cnt,
-      wasm.i32$const, 1,
-      wasm.i32$sub,
       wasm.local$get, ...seq,
       wasm.call, ...types.VectorSeq.fields.vec.leb128,
       wasm.call, ...inc_refs.func_idx_leb128,
+      wasm.local$set, ...vec,
       wasm.local$get, ...seq,
-      wasm.call, ...types.VectorSeq.fields.offset.leb128,
+      wasm.call, ...types.VectorSeq.fields.vec_off.leb128,
+      wasm.local$set, ...vec_off,
+      wasm.local$get, ...seq,
+      wasm.call, ...types.VectorSeq.fields.arr_off.leb128,
       wasm.i32$const, 1,
       wasm.i32$add,
-      wasm.call, ...types.VectorSeq.constr.leb128,
+      wasm.local$tee, ...arr_off,
+      wasm.local$get, ...seq,
+      wasm.call, ...types.VectorSeq.fields.arr.leb128,
+      wasm.local$tee, ...arr,
+      wasm.call, ...types.RefsArray.fields.arr.leb128,
+      wasm.call, ...types.Array.fields.length.leb128,
+      wasm.local$tee, ...len,
+      wasm.i32$lt_u,
+      wasm.if, wasm.i32,
+        wasm.local$get, ...arr,
+        wasm.local$get, ...arr_off,
+        wasm.local$get, ...vec,
+        wasm.local$get, ...vec_off,
+        wasm.call, ...types.VectorSeq.constr.leb128,
+      wasm.else,
+        wasm.local$get, ...vec,
+        wasm.local$get, ...vec_off,
+        wasm.local$get, ...len,
+        wasm.i32$add,
+        wasm.local$tee, ...vec_off,
+        wasm.call, ...unchecked_array_for.func_idx_leb128,
+        wasm.i32$const, 0,
+        wasm.local$get, ...vec,
+        wasm.local$get, ...vec_off,
+        wasm.call, ...types.VectorSeq.constr.leb128,
+      wasm.end,
     wasm.else,
       wasm.i32$const, ...leb128(empty_seq),
     wasm.end
@@ -4088,7 +4045,7 @@ impl_free(types.VectorSeq, function (func) {
   func.add_result(wasm.i32);
   func.append_code(
     wasm.local$get, ...seq,
-    wasm.call, ...types.VectorSeq.fields.count.leb128,
+    wasm.call, ...count.func_idx_leb128,
     wasm.if, wasm.i32,
       wasm.local$get, ...seq,
       wasm.call, ...types.VectorSeq.fields.vec.leb128,
@@ -4101,15 +4058,75 @@ impl_free(types.VectorSeq, function (func) {
 });
 
 const vector_to_seq = func_builder(function (func) {
-  const vec = func.param(wasm.i32);
+  const vec = func.param(wasm.i32),
+        cnt = func.local(wasm.i32),
+        shift = func.local(wasm.i32),
+        arr = func.local(wasm.i32);
   func.add_result(wasm.i32);
   func.append_code(
     wasm.local$get, ...vec,
     wasm.call, ...types.Vector.fields.count.leb128,
-    wasm.local$get, ...vec,
-    wasm.i32$const, 0,
-    wasm.call, ...types.VectorSeq.constr.leb128,
-    wasm.call, ...types.Seq.constr.leb128
+    wasm.local$tee, ...cnt,
+    wasm.if, wasm.i32,
+      wasm.local$get, ...cnt,
+      wasm.i32$const, 32,
+      wasm.i32$le_u,
+      wasm.if, wasm.i32,
+        wasm.local$get, ...vec,
+        wasm.call, ...types.Vector.fields.tail.leb128,
+      wasm.else,
+        wasm.local$get, ...vec,
+        wasm.call, ...types.Vector.fields.shift.leb128,
+        wasm.local$set, ...shift,
+        wasm.local$get, ...vec,
+        wasm.call, ...types.Vector.fields.root.leb128,
+        wasm.local$set, ...arr,
+        wasm.loop, wasm.i32,
+          wasm.local$get, ...shift,
+          wasm.if, wasm.i32,
+            wasm.local$get, ...arr,
+            wasm.i32$const, 0,
+            wasm.call, ...refs_array_get.func_idx_leb128,
+            wasm.local$set, ...arr,
+            wasm.local$get, ...shift,
+            wasm.i32$const, 5,
+            wasm.i32$sub,
+            wasm.local$set, ...shift,
+            wasm.br, 1,
+          wasm.else,
+            wasm.local$get, ...arr,
+          wasm.end,
+        wasm.end,
+      wasm.end,
+      wasm.i32$const, 0,
+      wasm.local$get, ...vec,
+      wasm.i32$const, 0,
+      wasm.call, ...types.VectorSeq.constr.leb128,
+      wasm.call, ...types.Seq.constr.leb128,
+    wasm.else,
+      wasm.i32$const, ...leb128(empty_seq),
+    wasm.end
+  );
+});
+
+const seq_append = func_builder(function (func) {
+  const seq = func.param(wasm.i32),
+        val = func.param(wasm.i32),
+        root = func.local(wasm.i32);
+  func.add_result(wasm.i32);
+  func.append_code(
+    wasm.local$get, ...seq,
+    wasm.call, ...types.Seq.fields.root.leb128,
+    wasm.local$tee, ...root,
+    wasm.if, wasm.i32,
+      wasm.local$get, ...root,
+      wasm.call, ...types.VectorSeq.fields.vec.leb128,
+    wasm.else,
+      wasm.i32$const, ...leb128(empty_vector),
+    wasm.end,
+    wasm.local$get, ...val,
+    wasm.call, ...conj.func_idx_leb128,
+    wasm.call, ...vector_to_seq.func_idx_leb128
   );
 });
 
