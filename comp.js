@@ -22,6 +22,7 @@
 // todo: handle String/File encodings other than UTF8
 // todo: emit number literal directly
 // todo: replace impl_free with direct inner call to free_mem
+// todo: atom keeps track of past values so it can free them
 
 (function init (module_sections, memory_content) {
   const is_browser = this === this.window;
@@ -1915,8 +1916,8 @@ define_type(
   "refs", "i32", 1, 0, 0,
   "flags", "i32", 1, 0, 0,
   "hash", "i32", 1, 0, 0,
-  "key", "i32", 0, 0, 0,
-  "val", "i32", 0, 0, 0
+  "key", "i32", 0, 0, wasm.i32,
+  "val", "i32", 0, 0, wasm.i32
 );
 
 define_type(
@@ -5029,6 +5030,15 @@ get.implement(types.HashMap, function (func) {
   );
 });
 
+count.implement(types.HashMap, function (func) {
+  const map = func.param(wasm.i32);
+  func.add_result(wasm.i32);
+  func.append_code(
+    wasm.local$get, ...map,
+    wasm.call, ...types.HashMap.fields.count.leb128
+  );
+});
+
 /*---*\
 |     |
 | Seq |
@@ -5355,7 +5365,7 @@ count.implement(types.HashMapSeq, function (func) {
   func.append_code(
     wasm.local$get, ...seq,
     wasm.call, ...types.HashMapSeq.fields.map.leb128,
-    wasm.call, ...types.HashMap.fields.count.leb128
+    wasm.call, ...count.func_idx_leb128
   );
 });
 
@@ -5370,9 +5380,10 @@ rest.implement(types.HashMapSeq, function (func) {
     wasm.local$get, ...seq,
     wasm.call, ...types.HashMapSeq.fields.root.leb128,
     wasm.call, ...rest.func_idx_leb128,
-    wasm.local$tee, ...seq,
+    wasm.local$tee, ...out,
     wasm.if, wasm.i32,
       wasm.local$get, ...seq,
+      wasm.call, ...types.HashMapSeq.fields.map.leb128,
       wasm.local$get, ...out,
       wasm.call, ...types.HashMapSeq.constr.leb128,
       wasm.call, ...types.Seq.constr.leb128,
@@ -5947,10 +5958,6 @@ comp.store_comp_func(
 );
 
 comp.store_comp_func(
-  make_symbol("seq"), 1, 0, 0, wasm.i32, to_seq.func_idx
-);
-
-comp.store_comp_func(
   make_symbol("vec-count"), 1, 0, 0, wasm.i32,
   func_builder(function (func) {
     const vec = func.param(wasm.i32);
@@ -5982,8 +5989,27 @@ comp.store_comp_func(make_symbol("nth"), 3, 0, 0, wasm.i32,
 );
 
 comp.store_comp_func(make_symbol("conj"), 2, 0, 0, wasm.i32, conj.func_idx);
+comp.store_comp_func(make_symbol("get"), 3, 0, 0, wasm.i32, get.func_idx);
+comp.store_comp_func(make_symbol("seq"), 1, 0, 0, wasm.i32, to_seq.func_idx);
+comp.store_comp_func(make_symbol("first"), 1, 0, 0, wasm.i32, first.func_idx);
+comp.store_comp_func(make_symbol("rest"), 1, 0, 0, wasm.i32, rest.func_idx);
 comp.store_comp_func(make_symbol("seq-append"), 2, 0, 0, wasm.i32, seq_append.func_idx);
 comp.store_comp_func(make_symbol("concat-str"), 2, 0, 0, wasm.i32, concat_str.func_idx);
+
+comp.store_comp_func(
+  make_symbol("count"), 1, 0, 0, wasm.i32,
+  func_builder(function (func) {
+    const coll = func.param(wasm.i32);
+	  const cnt = func.local(wasm.i32);
+    func.add_result(wasm.i32);
+    func.append_code(
+      wasm.local$get, ...coll,
+      wasm.call, ...count.func_idx_leb128,
+      wasm.i64$extend_i32_u,
+      wasm.call, ...types.Int.constr.leb128
+    );
+  }).func_idx
+);
 
 comp.store_comp_func(
   make_symbol("array-get-i8"), 2, 0, 0, wasm.i32,
@@ -9089,8 +9115,7 @@ const parse_list = func_builder(function (func) {
 const parse_vector = func_builder(function (func) {
   const str = func.param(wasm.i32),
         idx = func.param(wasm.i32),
-        lineno = func.param(wasm.i32),
-        seq = func.local(wasm.i32);
+        lineno = func.param(wasm.i32);
   func.add_result(wasm.i32, wasm.i32, wasm.i32);
   func.append_code(
     wasm.local$get, ...str,
@@ -9102,6 +9127,61 @@ const parse_vector = func_builder(function (func) {
     wasm.local$set, ...idx,
     wasm.call, ...types.Seq.fields.root.leb128,
     wasm.call, ...types.VectorSeq.fields.vec.leb128,
+    wasm.local$get, ...idx,
+    wasm.local$get, ...lineno
+  );
+});
+
+const parse_map = func_builder(function (func) {
+  const str = func.param(wasm.i32),
+        idx = func.param(wasm.i32),
+        lineno = func.param(wasm.i32),
+        seq = func.local(wasm.i32),
+        cnt = func.local(wasm.i32),
+        n = func.local(wasm.i32),
+        map = func.local(wasm.i32);
+  func.add_result(wasm.i32, wasm.i32, wasm.i32);
+  func.append_code(
+    wasm.i32$const, ...leb128(empty_hash_map),
+    wasm.local$set, ...map,
+    wasm.local$get, ...str,
+    wasm.local$get, ...idx,
+    wasm.local$get, ...lineno,
+    wasm.i32$const, ...leb128("}".codePointAt(0)),
+    wasm.call, ...parse_coll.func_idx_leb128,
+    wasm.local$set, ...lineno,
+    wasm.local$set, ...idx,
+    wasm.local$tee, ...seq,
+    wasm.call, ...count.func_idx_leb128,
+    wasm.local$set, ...cnt,
+    wasm.loop, wasm.void,
+      wasm.local$get, ...n,
+      wasm.local$get, ...cnt,
+      wasm.i32$lt_u,
+      wasm.if, wasm.void,
+        wasm.local$get, ...map,
+        wasm.local$get, ...seq,
+        wasm.local$get, ...n,
+        wasm.i32$const, nil,
+        wasm.call, ...nth.func_idx_leb128,
+        wasm.local$get, ...seq,
+        wasm.local$get, ...n,
+        wasm.i32$const, 1,
+        wasm.i32$add,
+        wasm.i32$const, nil,
+        wasm.call, ...nth.func_idx_leb128,
+        wasm.call, ...assoc.func_idx_leb128,
+        wasm.local$get, ...map,
+        wasm.call, ...free.func_idx_leb128,
+        wasm.local$set, ...map,
+        wasm.local$get, ...n,
+        wasm.i32$const, 2,
+        wasm.i32$add,
+        wasm.local$set, ...n,
+        wasm.br, 1,
+      wasm.end,
+    wasm.end,
+    wasm.local$get, ...map,
     wasm.local$get, ...idx,
     wasm.local$get, ...lineno
   );
@@ -9358,6 +9438,15 @@ read_form.build(function (func) {
               wasm.local$get, ...idx,
               wasm.local$get, ...lineno,
               wasm.call, ...parse_vector.func_idx_leb128,
+              wasm.local$set, ...lineno,
+              wasm.local$set, ...idx
+            ],
+            ["{"],
+            [
+              wasm.local$get, ...str,
+              wasm.local$get, ...idx,
+              wasm.local$get, ...lineno,
+              wasm.call, ...parse_map.func_idx_leb128,
               wasm.local$set, ...lineno,
               wasm.local$set, ...idx
             ],
@@ -9791,7 +9880,7 @@ if (!main_env.is_browser) {
     try {
       eval_file(argv[3]);
     } catch (e) {
-      //console.log(exception_enum[e.getArg(exception_tag, 0)]);
+      console.log(exception_enum[e.getArg(exception_tag, 0)]);
       console.log(e);
       return;
     }
