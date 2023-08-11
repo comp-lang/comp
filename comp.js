@@ -6101,9 +6101,10 @@ comp.store_comp_func(
 );
 
 comp.store_comp_func(
-  make_symbol("defmethod"), 2, 0, 0, wasm.i32,
+  make_symbol("defmethod"), 3, 0, 0, wasm.i32,
   func_builder(function (func) {
     const mtd_name = func.param(wasm.i32),
+          num_args = func.param(wasm.i32),
           def_func = func.param(wasm.i32),
           mtd_func = func.local(wasm.i32),
           mtd_num = func.local(wasm.i32);
@@ -6114,16 +6115,9 @@ comp.store_comp_func(
 // todo: str instead of name
       wasm.call, ...types.Symbol.fields.name.leb128,
       wasm.call, ...store_string.func_idx_leb128,
-      wasm.local$get, ...def_func,
-      wasm.call, ...types.Int.predicate_leb128,
-      wasm.if, wasm.i32,
-        wasm.local$get, ...def_func,
-        wasm.call, ...types.Int.fields.value.leb128,
-        wasm.i32$wrap_i64,
-      wasm.else,
-// todo: get args from default function
-        wasm.i32$const, 0,
-      wasm.end,
+      wasm.local$get, ...num_args,
+      wasm.call, ...types.Int.fields.value.leb128,
+      wasm.i32$wrap_i64,
       wasm.i32$const, 0,
       wasm.i32$const, 0,
       wasm.i32$const, ...leb128(wasm.i32),
@@ -6131,8 +6125,15 @@ comp.store_comp_func(
       wasm.local$set, ...mtd_num,
       wasm.local$set, ...mtd_func,
       wasm.local$get, ...mtd_num,
-// todo: default_func
-      wasm.i32$const, 0,
+      wasm.local$get, ...def_func,
+      wasm.call, ...types.Method.predicate_leb128,
+      wasm.if, wasm.i32,
+        wasm.local$get, ...def_func,
+        wasm.call, ...types.Method.fields.main_func.leb128,
+        wasm.local$tee, ...def_func,
+      wasm.else,
+        wasm.local$get, ...def_func,
+      wasm.end,
       wasm.local$get, ...mtd_func,
       wasm.call, ...store_method.func_idx_leb128,
       wasm.call, ...impl_def_func_all_types.func_idx_leb128,
@@ -9256,7 +9257,9 @@ const parse_string = func_builder(function (func) {
   const str = func.param(wasm.i32),
         idx = func.param(wasm.i32),
         lineno = func.param(wasm.i32),
-        orig = func.local(wasm.i32),
+        out = func.local(wasm.i32),
+        segment = func.local(wasm.i32),
+        start = func.local(wasm.i32),
         chr = func.local(wasm.i32);
   func.add_result(wasm.i32, wasm.i32, wasm.i32);
   func.append_code(
@@ -9264,7 +9267,7 @@ const parse_string = func_builder(function (func) {
     wasm.i32$const, 1,
     wasm.i32$add,
     wasm.local$tee, ...idx,
-    wasm.local$set, ...orig,
+    wasm.local$set, ...start,
     wasm.loop, wasm.void,
       wasm.local$get, ...str,
       wasm.local$get, ...idx,
@@ -9278,7 +9281,24 @@ const parse_string = func_builder(function (func) {
         wasm.i32$const, ...leb128("\\".codePointAt(0)),
         wasm.i32$eq,
         wasm.if, wasm.void,
+          wasm.local$get, ...str,
+          wasm.local$get, ...start,
           wasm.local$get, ...idx,
+          wasm.i32$const, 1,
+          wasm.i32$sub,
+          wasm.call, ...substring_until.func_idx_leb128,
+          wasm.local$set, ...segment,
+          wasm.local$get, ...out,
+          wasm.if, wasm.i32,
+            wasm.local$get, ...out,
+            wasm.local$get, ...segment,
+            wasm.call, ...concat_str.func_idx_leb128,
+          wasm.else,
+            wasm.local$get, ...segment,
+          wasm.end,
+          wasm.local$set, ...out,
+          wasm.local$get, ...idx,
+          wasm.local$tee, ...start,
           wasm.i32$const, 1,
           wasm.i32$add,
           wasm.local$set, ...idx,
@@ -9297,11 +9317,20 @@ const parse_string = func_builder(function (func) {
       wasm.end,
     wasm.end,
     wasm.local$get, ...str,
-    wasm.local$get, ...orig,
+    wasm.local$get, ...start,
     wasm.local$get, ...idx,
     wasm.i32$const, 1,
     wasm.i32$sub,
     wasm.call, ...substring_until.func_idx_leb128,
+    wasm.local$set, ...segment,
+    wasm.local$get, ...out,
+    wasm.if, wasm.i32,
+      wasm.local$get, ...out,
+      wasm.local$get, ...segment,
+      wasm.call, ...concat_str.func_idx_leb128,
+    wasm.else,
+      wasm.local$get, ...segment,
+    wasm.end,
     wasm.local$get, ...idx,
     wasm.local$get, ...lineno
   );
@@ -9880,7 +9909,8 @@ if (!main_env.is_browser) {
     try {
       eval_file(argv[3]);
     } catch (e) {
-      console.log(exception_enum[e.getArg(exception_tag, 0)]);
+      if (e instanceof WebAssembly.Exception && e.is(exception_tag))
+        console.log(exception_enum[e.getArg(exception_tag, 0)]);
       console.log(e);
       return;
     }
