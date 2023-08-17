@@ -72,6 +72,9 @@ function build_comp (
   memory_content
 ) {
 
+const fs = require("fs"),
+      {minify} = require("uglify-js");
+
 console.time("all");
 
 /*------*\
@@ -434,7 +437,7 @@ function _get_type_idx (spec) {
 // increment import_num instead of counting func_import_section because
 // in compiled files, func_import_section will already be filled out
 // this allows us to reinsantiate imported funcs in js w/o altering func_import_section
-let import_num = 0, func_num = 0;
+let import_num = 0, func_num = func_section.length;
 
 function reserve_func_num (spec) {
   spec.func_idx = func_num++;
@@ -454,7 +457,7 @@ const funcs = [];
 function func (spec) {
   return func_wrapper(spec, function () {
     const func_num = spec.func_idx - import_num;
-    func_section[func_num] = [spec.type_idx];
+    func_section[func_num] = spec.type_idx;
     if (spec.export) {
       export_section.push([
         ...wasm_encode_string(spec.export), 0,
@@ -480,21 +483,17 @@ function func (spec) {
   });
 }
 
-function import_func ({
+function import_func (
   i32_params = 0,
   i64_params = 0,
   f64_params = 0,
-  i32_results = 0,
-  i64_results = 0,
-  f64_results = 0
-}, func) {
-  const spec = { params: [], result: [] };
+  results, func
+) {
+  const spec = { params: [] };
   for (let i = 0; i < i32_params; i++) spec.params.push(wasm.i32);
   for (let i = 0; i < i64_params; i++) spec.params.push(wasm.i64);
   for (let i = 0; i < f64_params; i++) spec.params.push(wasm.f64);
-  for (let i = 0; i < i32_results; i++) spec.result.push(wasm.i32);
-  for (let i = 0; i < i64_results; i++) spec.result.push(wasm.i64);
-  for (let i = 0; i < f64_results; i++) spec.result.push(wasm.f64);
+  spec.result = results;
   func_wrapper(spec, function () {
     const import_name = `func_import_${import_num++}`;
     imports[import_name] = func;
@@ -514,7 +513,7 @@ function import_func ({
 }
 
 const get_type_idx = import_func(
-  { i32_params: 4, i32_results: 1 },
+  4, 0, 0, [wasm.i32],
   function (
     i32_params,
     i64_params,
@@ -594,7 +593,7 @@ const // todo: do we need null, false, true?
 let next_ref_address = -1;
 
 const store_ref = import_func(
-  { i32_params: 1, i32_results: 1 },
+  1, 0, 0, [wasm.i32],
   function (obj) {
     let nra = next_ref_address;
     if (nra === -1) {
@@ -612,7 +611,7 @@ function load_ref (idx) {
 }
 
 const free_ref = import_func(
-  { i32_params: 1, i32_results: 0 },
+  1, 0, 0, [],
   function (idx) {
     ref_table[idx] = next_ref_address;
     next_ref_address = idx;
@@ -630,7 +629,7 @@ const open_funcs = [null];
 let next_func_idx = 0;
 
 const start_func = import_func(
-  { i32_params: 0, i32_results: 1 },
+  0, 0, 0, [wasm.i32],
   function () {
     const curr_func = reserve_func_num({
       params: [],
@@ -650,14 +649,14 @@ const start_func = import_func(
 );
 
 const get_func_num = import_func(
-  { i32_params: 1, i32_results: 1 },
+  1, 0, 0, [wasm.i32],
   function (idx) {
     return open_funcs[idx].func_idx;
   }
 );
 
 const end_func = import_func(
-  { i32_params: 1, i32_results: 1 },
+  1, 0, 0, [wasm.i32],
   function (idx) {
     const out = func(open_funcs[idx]);
     open_funcs[idx] = next_func_idx;
@@ -667,7 +666,7 @@ const end_func = import_func(
 );
 
 const set_export = import_func(
-  { i32_params: 2, i32_results: 1 },
+  2, 0, 0, [wasm.i32],
   function (fidx, xpt) {
     open_funcs[fidx].export = load_ref(xpt);
     free_ref(xpt);
@@ -677,7 +676,7 @@ const set_export = import_func(
 
 function push_code (coll) {
   return import_func(
-    { i32_params: 2, i32_results: 1 },
+    2, 0, 0, [wasm.i32],
     function (fidx, code) {
       if (code) open_funcs[fidx][coll].push(code);
       return fidx;
@@ -691,7 +690,7 @@ const add_param = push_code("params"),
       append_code = push_code("code");
 
 const prepend_code = import_func(
-  { i32_params: 2, i32_results: 1 },
+  2, 0, 0, [wasm.i32],
   function (fidx, code) {
     open_funcs[fidx].code.unshift(code);
     return fidx;
@@ -700,7 +699,7 @@ const prepend_code = import_func(
 
 function add_varint32 (append, signed) {
   return import_func(
-    { i32_params: 2, i32_results: 1 },
+    2, 0, 0, [wasm.i32],
     function (fidx, num) {
       num = signed ? leb128(num) : uleb128(num);
       const code = open_funcs[fidx].code;
@@ -711,7 +710,7 @@ function add_varint32 (append, signed) {
 }
 
 const append_varsint64 = import_func(
-  { i32_params: 1, i64_params: 1, i32_results: 1 },
+  1, 1, 0, [wasm.i32],
   function (fidx, num) {
     const code = open_funcs[fidx].code;
 // todo: is uleb right here? doesn't work w/ leb128
@@ -726,7 +725,7 @@ const prepend_varuint32 = add_varint32(false, false),
       append_varsint32 = add_varint32(true, true);
 
 const get_op_code = import_func(
-  { i32_params: 2, i32_results: 1 },
+  2, 0, 0, [wasm.i32],
   function (namespace, name) {
     namespace = load_ref(namespace);
     let op_name = load_ref(name);
@@ -759,7 +758,7 @@ function complete_start_func () {
 }
 
 const add_to_start_func = import_func(
-  { i32_params: 1 },
+  1, 0, 0, [],
   function (fidx) {
     start_funcs.push(fidx);
     fidx = uleb128(fidx);
@@ -786,7 +785,8 @@ function flatten_table_section () {
   return out;
 }
 
-const compile = import_func({},
+const compile = import_func(
+  0, 0, 0, [],
   function () {
     const start_section = complete_start_func();
     while (funcs.length) funcs.shift()();
@@ -797,7 +797,7 @@ const compile = import_func({},
           ],
           ts = [...uleb128(type_section.length),   ...type_section.flat()],
           is = [...uleb128(import_section.length), ...import_section.flat()],
-          fs = [...uleb128(func_section.length),   ...func_section.flat()],
+          fs = [...uleb128(func_section.length),   ...func_section],
           bs = [...uleb128(table_section.length),  ...flatten_table_section()],
           as = [...uleb128(tag_section.length),    ...tag_section.flat()],
           es = [...uleb128(export_section.length), ...export_section.flat()],
@@ -832,7 +832,7 @@ const compile = import_func({},
 \*------*/
 
 const new_func_table = import_func(
-  { i32_results: 1 },
+  0, 0, 0, [wasm.i32],
   function () {
     const table_idx = table_section.length;
     table_section.push([wasm.funcref, 0, 0]);
@@ -841,7 +841,7 @@ const new_func_table = import_func(
 );
 
 const impl_method = import_func(
-  { i32_params: 3 },
+  3, 0, 0, [],
   function (mtd_num, type_num, func_num) {
     const mtd_table = table_section[mtd_num];
     if (mtd_table[2] <= type_num) mtd_table[2] = type_num + 1;
@@ -855,7 +855,7 @@ const impl_method = import_func(
 
 // export comp func for use with call_indirect
 const add_to_func_table = import_func(
-  { i32_params: 1, i32_results: 1 },
+  1, 0, 0, [wasm.i32],
   function (func_num) {
     const idx = table_section[0][2];
     impl_method(0, idx, func_num);
@@ -870,21 +870,21 @@ const add_to_func_table = import_func(
 \*----------*/
 
 const js_eq = import_func(
-  { i32_params: 2, i32_results: 1 },
+  2, 0, 0, [wasm.i32],
   function (a, b) {
     return (load_ref(a) === load_ref(b)) ? 1 : 0;
   }
 );
 
 const js_add = import_func(
-  { i32_params: 2, i32_results: 1 },
+  2, 0, 0, [wasm.i32],
   function (a, b) {
     return store_ref(load_ref(a) + load_ref(b));
   }
 );
 
 const js_get = import_func(
-  { i32_params: 2, i32_results: 1 },
+  2, 0, 0, [wasm.i32],
   function (obj, prop) {
     obj = load_ref(obj);
     prop = load_ref(prop);
@@ -894,7 +894,7 @@ const js_get = import_func(
 );
 
 const js_call = import_func(
-  { i32_params: 3, i32_results: 1 },
+  3, 0, 0, [wasm.i32],
   function (obj, mtd, arr) {
     obj = comp_string_to_js(obj);
     mtd = comp_string_to_js(mtd);
@@ -909,6 +909,7 @@ const js_call = import_func(
   }
 );
 
+/*
 const print = import_func(
   { i32_params: 1, i32_results: 1 },
   function (str) {
@@ -917,7 +918,6 @@ const print = import_func(
   }
 );
 
-/*
 function sym_to_js (which, addr) {
   const ns = comp[`${which}$namespace`](addr);
   return store_ref({
@@ -968,17 +968,15 @@ function vector_to_js (addr) {
 |         |
 \*-------*/
 
-// review here down
-
-function slice_source (str, which) {
-  const directive_start = `\n// !!! ${which} cut\n`;
-  let start_cut = str.indexOf(directive_start);
+function slice_source (str) {
+  const cut_point = `\n// !!! package cut\n`;
+  let start_cut = str.indexOf(cut_point);
   while (start_cut > -1) {
-    const cut = str.slice(start_cut + directive_start.length),
-          aft_cut = cut.slice(cut.indexOf(directive_start) + directive_start.length + 1);
+    const cut = str.slice(start_cut + cut_point.length),
+          aft_cut = cut.slice(cut.indexOf(cut_point) + cut_point.length + 1);
     str = str.slice(0, start_cut);
     str += aft_cut;
-    start_cut = str.indexOf(directive_start);
+    start_cut = str.indexOf(cut_point);
   }
   return str;
 }
@@ -986,16 +984,14 @@ function slice_source (str, which) {
 let next_addr;
 
 function build_package () {
-  let func_code = build_comp.toString();
-  func_code = slice_source(func_code, "package");
-  if (typeof minify !== "undefined") func_code = minify(func_code).code;
+  let func_code = slice_source(build_comp.toString());
   let init_code = init.toString();
-  if (typeof minify !== "undefined") init_code = minify(init_code).code;
   func_code += `(${init_code}).call(this,`;
   func_code += JSON.stringify(module_sections) + ",";
   const last_addr = Atomics.load(new Uint32Array(memory.buffer), next_addr / 4),
         mem_arr = Array.from(new Uint32Array(memory.buffer, 0, last_addr / 4));
   func_code += JSON.stringify(mem_arr) + ");";
+  if (typeof minify !== "undefined") func_code = minify(func_code).code;
   return func_code;
 }
 
@@ -1015,7 +1011,7 @@ function comp_string_to_js (addr) {
 const strings = {}, string_refs = {};
 
 const store_string = import_func(
-  { i32_params: 1, i32_results: 1 },
+  1, 0, 0, [wasm.i32],
   function (str) {
     const js_str = comp_string_to_js(str);
     if (string_refs[js_str]) return string_refs[js_str];
@@ -1040,15 +1036,15 @@ function make_string (str) {
 }
 
 const print_plain_string = import_func(
-  { i32_params: 1 },
+  1, 0, 0, [],
   function (str) {
     console.log(comp_string_to_js(str));
   }
 );
 
-const print_i64 = import_func({i64_params: 1}, (n) => console.log(n));
-const print_f64 = import_func({f64_params: 1}, (n) => console.log(n));
-const print_i32 = import_func({i32_params: 1}, (n) => console.log(n));
+const print_i64 = import_func(0, 1, 0, [], (n) => console.log(n));
+const print_f64 = import_func(0, 0, 1, [], (n) => console.log(n));
+const print_i32 = import_func(1, 0, 0, [], (n) => console.log(n));
 
 /*
 const print_char = import_func(
@@ -1075,7 +1071,7 @@ const print_string = import_func(
 const exception_enum = [];
 
 const def_exception = import_func(
-  {i32_params: 1, i32_results: 1},
+  1, 0, 0, [wasm.i32],
   function (msg) {
     if (typeof msg === "number") {
       msg = comp_string_to_js(msg);
@@ -1092,14 +1088,14 @@ const def_exception = import_func(
 \*------------*/
 
 const file_close = import_func(
-  { i32_params: 1 },
+  1, 0, 0, [],
   function (fstr) {
     fs.closeSync(comp.File$fd(fstr));
   }
 );
 
 const file_length = import_func(
-  { i32_params: 1, i32_results: 1 },
+  1, 0, 0, [wasm.i32],
   function (fstr) {
     const fd = comp.File$fd(fstr);
     return fs.fstatSync(fd).size;
@@ -1107,7 +1103,7 @@ const file_length = import_func(
 );
 
 const file_get_string_chunk = import_func(
-  { i32_params: 3, i32_results: 1},
+  3, 0, 0, [wasm.i32],
   function (fstr, start, len) {
     const arr = comp.array_by_length(Math.ceil(len / 4)),
           buf = new DataView(memory.buffer),
@@ -1128,7 +1124,7 @@ let thread_port;
 
 // todo: maintain thread pool
 const start_thread = import_func(
-  { i32_results: 1 },
+  0, 0, 0, [wasm.i32],
   function () {
     if (!main_env.is_browser) {
       const thread_port = comp.alloc(8),
@@ -8912,22 +8908,6 @@ compile_form.build(function (func) {
     wasm.call, ...new_env.func_idx_leb128,
     wasm.local$tee, ...env,
     wasm.call, ...emit_code.func_idx_leb128,
-//wasm.i32$const, ...leb128(wasm.local$tee),
-//wasm.call, ...append_code.func_idx_leb128,
-//wasm.i32$const, 0,
-//wasm.call, ...append_code.func_idx_leb128,
-//wasm.i32$const, ...leb128(wasm.local$get),
-//wasm.call, ...append_code.func_idx_leb128,
-//wasm.i32$const, 0,
-//wasm.call, ...append_code.func_idx_leb128,
-//wasm.i32$const, ...leb128(wasm.call),
-//wasm.call, ...append_code.func_idx_leb128,
-//wasm.i32$const, ...leb128(to_js.func_idx),
-//wasm.call, ...append_varsint32.func_idx_leb128,
-//wasm.i32$const, ...leb128(wasm.call),
-//wasm.call, ...append_code.func_idx_leb128,
-//wasm.i32$const, ...leb128(print_obj.func_idx),
-//wasm.call, ...append_varsint32.func_idx_leb128,
     wasm.i32$const, ...leb128(wasm.i32$store),
     wasm.call, ...append_code.func_idx_leb128,
     wasm.i32$const, 2,
@@ -10257,19 +10237,15 @@ const eval_stream = func_builder(function (func) {
 
 // END COMP
 
-const fs = require("fs");
-const {minify} = require("uglify-js");
-
-fs.writeFile("blah", build_package(), () => null);
+// !!! package cut
 
 compile();
 
-// thread_port = comp.alloc(8);
+// !!! package cut
+fs.writeFile("blah", build_package(), () => null);
+// !!! package cut
 
-function eval_file (f) {
-  const fd = fs.openSync(f, "r");
-  comp.eval_stream(comp.File(fd));
-}
+// thread_port = comp.alloc(8);
 
 // todo: this is changing address 0 (nil)
 
@@ -10279,8 +10255,6 @@ function eval_file (f) {
 // } else {
 //   comp.watch(comp.Atom(nil), 3);
 // }
-
-// !!! package cut
 
 // console.log(to_js(eval_string(`
 // (def 'add (func _ (x y) (Int/new (i64/add (Int/value x) (Int/value y)))))
@@ -10305,6 +10279,14 @@ function eval_file (f) {
 
 // start_thread();
 
+console.timeEnd("all");
+console.time("core");
+
+function eval_file (f) {
+  const fd = fs.openSync(f, "r");
+  comp.eval_stream(comp.File(fd));
+}
+
 if (!main_env.is_browser) {
   // const argv = process.argv;
   if (argv.compile) {
@@ -10319,7 +10301,7 @@ if (!main_env.is_browser) {
   }
 }
 
-console.timeEnd("all");
+console.timeEnd("core");
 
 }
 
