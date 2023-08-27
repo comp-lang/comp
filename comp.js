@@ -27,13 +27,14 @@
 // todo: free Function & VariadicFunction
 // todo: seq_first, seq_rest, etc
 // todo: make callable as a library (export init)
+// todo: if won't be doing any interpretation, leave out code
 
 // command line flags:
 //   --compile filename
 //   --init_pages num
 //   --max_pages num
 
-(function init (module_sections, memory_content) {
+(function init (module_code, byte_len, mem_len) {
   const is_browser = this === this.window;
   if (is_browser) {
   
@@ -53,10 +54,10 @@
       build_comp(new_worker, init, {
         is_browser: false,
         is_main: true
-      }, argv, global, module_sections, memory_content);
+      }, argv, global, module_code, byte_len, mem_len);
     } else {
       workers.parentPort.on("message", function (env) {
-        build_comp(new_worker, init, env, argv, global, module_sections);
+        build_comp(new_worker, init, env, argv, global, module_code);
       });
     }
   }
@@ -68,8 +69,9 @@ function build_comp (
   main_env,
   argv,
   js_imports,
-  module_sections,
-  memory_content
+  module_code,
+  byte_len,
+  mem_len
 ) {
 
 const fs = require("fs"),
@@ -82,6 +84,20 @@ console.time("all");
 | leb128 |
 |        |
 \*------*/
+
+// todo: replace leb128 w/ leb128i32 for i32
+
+function uleb128i32 (num) {
+  const arr = new Uint8Array(5);
+  let count = 0;
+  do {
+    const byte_ = num & 0x7f;
+    num >>>= 7;
+    arr[count] = byte_ | (num ? 0x80 : 0);
+    count++;
+  } while (num)
+  return arr.subarray(0, count);
+}
 
 function uleb128 (num) {
   num = BigInt(num);
@@ -340,11 +356,282 @@ const wasm = {
   i32:				0x7f
 };
 
+/*------*\
+|        |
+| base64 |
+|        |
+\*------*/
+
+let module_sections = byte_len ? [] : null;
+
+// based on https://github.com/niklasvh/base64-arraybuffer/blob/master/src/index.ts
+
+const b64_alph = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+const b64_lookup = new Uint8Array(256);
+
+for (let i = 0; i < b64_alph.length; i++) {
+  b64_lookup[b64_alph.charCodeAt(i)] = i;
+}
+
+function b64_encode (arr) {
+  let arr32 = new Uint32Array(arr.buffer),
+      len = arr32.length,
+      i = 0,
+      num = arr32[i],
+      byt_cnt = 0,
+      bytes = new Uint8Array(3),
+      string = '';
+
+  while (i < len) {
+    while (byt_cnt < 3) {
+      const byt = num & 0x7f;
+      num >>>= 7;
+      bytes[byt_cnt] = byt | (num ? 0x80 : 0);
+      byt_cnt++;
+      if (!num) {
+        if (++i < len) num = arr32[i];
+	else break;
+      }
+    }
+    
+    for (let j = 0; j < byt_cnt; j += 3) {
+      const char1 = bytes[j],
+            char2 = j + 1 < byt_cnt ? bytes[j + 1] : 0;
+      string += b64_alph[char1 >> 2];
+      string += b64_alph[((char1 & 3) << 4) | (char2 >> 4)];
+      if (j + 1 === byt_cnt) {
+        string += "==";
+      } else {
+        const char3 = j + 2 < byt_cnt ? bytes[j + 2] : 0;
+        string += b64_alph[((char2 & 15) << 2) | (char3 >> 6)];
+        if (j + 2 === byt_cnt) {
+          string += "=";
+        } else {
+          string += b64_alph[char3 & 63];
+        }
+      }
+    }
+
+    byt_cnt = 0;
+  }
+
+  return string;
+}
+
+function process_section (curr, byt) {
+  function reader (type, varints, bytes, next) {
+    return {
+      type,
+      varints,
+      mod_sec: curr.mod_sec,
+      cnt: bytes || 0,
+      content: [],
+      prev: curr,
+      next: typeof next === "function" ? next : () => next
+    };
+  }
+  const first = !curr.type;
+  if (first) curr = reader(byt, 2);
+  const next = (function (curr) {
+    let next;
+    function final_next () {
+      this.mod_sec.push(curr.content);
+      curr.content = [];
+      return --curr.cnt ? process_section(curr, byt) : curr.prev;
+    }
+    switch (curr.type) {
+      // byte reader (array)
+      case -1:
+        curr.prev.content.push(byt);
+        return --curr.cnt ? curr : curr.next();
+      // varint reader (never appears here)
+      case -2: return;
+      // type section
+      case 1:
+        if (first) module_sections.push(curr.mod_sec = []);
+        return reader(-1, 0, 1,
+                 reader(-1, 1, 0,
+                   reader(-1, 1, 0, final_next)));
+      // import section
+      case 2:
+        if (first) {
+          module_sections.push(
+            curr.func_imports = [],
+            curr.memory_imports = [],
+            curr.tag_imports = []
+          );
+        }
+        next = reader(-2, 1, 0, function () {
+          let next;
+          if (this.cnt === 0) {
+            next = reader(-2, 1, 0, final_next);
+            next.mod_sec = curr.func_imports;
+          } else if (this.cnt === 2) {
+            next = reader(-2, 3, 0, final_next);
+            next.mod_sec = curr.memory_imports;
+          } else if (this.cnt === 4) {
+            next = reader(-2, 2, 0, final_next);
+            next.mod_sec = curr.tag_imports;
+          }
+          return next;
+        });
+        return reader(-1, 1, 0, reader(-1, 1, 0, next));
+      // function section
+      case 3:
+        curr.mod_sec = module_sections;
+        return reader(-1, 0, 1, function () {
+          this.cnt = curr.cnt - 1;
+          curr.cnt = 1;
+          this.next = final_next;
+          return this;
+        });
+      // table section
+      case 4:
+      // tag section
+      case 13:
+        if (first) module_sections.push(curr.mod_sec = []);
+      return reader(-1, 0, curr.type === 4 ? 3 : 2, final_next);
+      // export section
+      case 7:
+        if (first) module_sections.push(curr.mod_sec = []);
+        return reader(-1, 1, 0,
+                 reader(-1, 0, 1, 
+                   reader(-2, 1, 0, final_next)));
+      // elem section
+      case 9:
+        if (first) module_sections.push(curr.mod_sec = []);
+        return reader(-2, 2, 0,
+                 reader(-1, 0, 1,
+                   reader(-2, 1, 0,
+                     reader(-1, 0, 3,
+                       reader(-2, 1, 0, final_next)))));
+      // code section
+      case 10:
+        if (first) module_sections.push(curr.mod_sec = []);
+        return reader(-1, 1, 0, final_next);
+      // data section
+      case 11:
+        if (first) curr.mod_sec = module_sections;
+        curr.cnt = 1;
+        next = reader(-1, 1, 0, function () {
+          curr.content.splice(0, 3);
+          return final_next.call(this);
+        });
+        return reader(-1, 0, 4, function () {
+                 curr.content = [];
+                 return next;
+               });
+    }
+  })(curr);
+  if (first) {
+    curr.next = () => next;
+    return curr;
+  }
+  return next;
+}
+
+function build_module_sections (bytes, idx, [curr, shift]) {
+  let next;
+  if (idx >= 8) {
+    for (let i = 0; i < 4; i++, idx++) {
+      if (!curr) return [curr, shift];
+      if (!curr.type) {
+        curr = process_section(curr, bytes[idx]);
+      } else if (curr.varints) {
+        if (curr.type < 0) curr.prev.content.push(bytes[idx]);
+        curr.cnt |= (bytes[idx] & 0x7f) << shift;
+        if (bytes[idx] & 0x80) {
+          shift += 7;
+        } else {
+          curr.varints--;
+          shift = 0;
+          if (curr.type === -1) {
+            if (!curr.cnt) curr = curr.next();
+          } else if (!curr.varints) {
+            curr = curr.next();
+          } else {
+            curr.cnt = 0;
+          }
+        }
+      } else {
+        curr = process_section(curr, bytes[idx]);
+      }
+    }
+  }
+  return [curr, shift];
+}
+
+function b64_decode (string, byte_len) {
+  let buff_len = Math.ceil(byte_len / 4) * 4,
+      len = string.length,
+      idx = 0,
+      char1,
+      char2,
+      char3,
+      char4,
+      bytes = new Uint8Array(3),
+      num = 0,
+      shift = 0,
+      mod_sec_data = [{ type: 0, content: [] }, 0];
+
+  const buff = new ArrayBuffer(buff_len),
+        arr32 = new Uint32Array(buff),
+        arr8 = new Uint8Array(buff, 0, byte_len);
+
+  for (let i = 0; i < len; i += 4) {
+    char1 = b64_lookup[string.charCodeAt(i)];
+    char2 = b64_lookup[string.charCodeAt(i + 1)];
+
+    if (string[i + 2] === "=") {
+      char3 = 0;
+    } else {
+      char3 = b64_lookup[string.charCodeAt(i + 2)];
+    }
+
+    if (string[i + 3] === "=") {
+      char4 = 0;
+    } else {
+      char4 = b64_lookup[string.charCodeAt(i + 3)];
+    }
+
+    bytes[0] = (char1 << 2) | (char2 >> 4);
+    bytes[1] = ((char2 & 15) << 4) | (char3 >> 2);
+    bytes[2] = ((char3 & 3) << 6) | (char4 & 63);
+
+    for (let j = 0; j < 3; j++) {
+      num |= (bytes[j] & 0x7f) << shift;
+      if (bytes[j] & 0x80) {
+        shift += 7;
+      } else {
+        arr32[idx++] = num;
+        mod_sec_data = build_module_sections(arr8, (idx - 1) * 4, mod_sec_data);
+        num = 0;
+        shift = 0;
+        if (idx === buff_len) break;
+      }
+    }
+  }
+
+  return arr8;
+};
+
+const precompiled = byte_len ? b64_decode(module_code, byte_len) : null;
+
 /*--------------*\
 |                |
 | wasm interface |
 |                |
 \*--------------*/
+
+// in a child thread memory will be provided through main_env
+// in a compiled file, memory_content will be provided to init() in source code
+const memory = main_env.memory ||
+  new WebAssembly.Memory({
+    initial: (mem_len ? Math.ceil(mem_len / 65536) : 0) || argv.init_pages || 1,
+    maximum: argv.max_pages || 65536,
+    shared: true
+  });
 
 const encode = ((t) => t.encode.bind(t))(new TextEncoder),
       decode = ((t) => t.decode.bind(t))(new TextDecoder);
@@ -353,19 +640,6 @@ function wasm_encode_string (str) {
   const encoded = encode(str);
   return [encoded.length, ...encoded];
 }
-
-// in a child thread memory will be provided through main_env
-// in a compiled file, memory_content will be provided to init() in source code
-const memory = main_env.memory || (function (cont) {
-  const init_pages = Math.ceil(cont.length * 4 / 65536) || argv.init_pages || 1;
-  const mem = new WebAssembly.Memory({
-    initial: init_pages,
-    maximum: argv.max_pages || 65536,
-    shared: true
-  });
-  new Uint32Array(mem.buffer).set(cont);
-  return mem;
-})(memory_content || []);
 
 const [
   type_section,
@@ -377,8 +651,8 @@ const [
   tag_section,
   export_section,
   elem_section,
-  code_section
-  // in a compiled file, module_sections will be provided to init() in source code:
+  code_section,
+  data_section
 ] = module_sections ||= [
   [[wasm.func, 2, wasm.i32, wasm.i32, 0]],
   [],
@@ -399,18 +673,13 @@ const [
   [[0, 0]],
   [],
   [],
+  [],
   []
 ];
 
 const // exception type and data
       exception_tag = new WebAssembly.Tag({ parameters: ["i32", "i32"] }),
       imports = { memory: memory, exception_tag };
-
-/*--------------*\
-|                |
-| wasm interface |
-|                |
-\*--------------*/
 
 function _get_type_idx (spec) {
   const spec_sig = [
@@ -475,6 +744,7 @@ function func (spec) {
         curr_type = t;
       }
     }
+// todo: why this way?
     funcs.push(function () {
       spec.code.unshift(...locals);
       spec.code.push(wasm.end);
@@ -505,7 +775,7 @@ function import_func (
       func_import_section.push([
         ...wasm_encode_string("imports"),
         ...wasm_encode_string(import_name),
-        0, spec.type_idx
+        0, ...uleb128i32(spec.type_idx)
       ]);
     }
   });
@@ -785,38 +1055,47 @@ function flatten_table_section () {
   return out;
 }
 
+function build_module_code (data) {
+  const start_section = complete_start_func();
+  while (funcs.length) funcs.shift()();
+  const import_section = [
+          ...memory_import_section,
+          ...tag_import_section,
+          ...func_import_section
+        ],
+        ts = [...uleb128i32(type_section.length),   ...type_section.flat()],
+        is = [...uleb128i32(import_section.length), ...import_section.flat()],
+        fs = [...uleb128i32(func_section.length),   ...func_section],
+        bs = [...uleb128i32(table_section.length),  ...flatten_table_section()],
+        as = [...uleb128i32(tag_section.length),    ...tag_section.flat()],
+        es = [...uleb128i32(export_section.length), ...export_section.flat()],
+        ls = [...uleb128i32(elem_section.length),   ...elem_section.flat()],
+        cs = [...uleb128i32(code_section.length),   ...code_section.flat()],
+        ds = [
+          1, 0, wasm.i32$const, 0, wasm.end,
+          ...uleb128i32(data_section.length), ...data_section
+        ],
+        module_code = [
+          0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+          1,  ...uleb128i32(ts.length), ...ts,
+          2,  ...uleb128i32(is.length), ...is,
+          3,  ...uleb128i32(fs.length), ...fs,
+          4,  ...uleb128i32(bs.length), ...bs,
+          13, ...uleb128i32(as.length), ...as,
+          7,  ...uleb128i32(es.length), ...es,
+          ...start_section,
+          9,  ...uleb128i32(ls.length), ...ls,
+          10, ...uleb128i32(cs.length), ...cs,
+          ...(data ? [11, ...uleb128i32(ds.length), ...ds] : [])
+        ];
+  return Uint8Array.from(module_code);
+}
+
 const compile = import_func(
   0, 0, 0, [],
-  function () {
-    const start_section = complete_start_func();
-    while (funcs.length) funcs.shift()();
-    const import_section = [
-            ...memory_import_section,
-            ...tag_import_section,
-            ...func_import_section
-          ],
-          ts = [...uleb128(type_section.length),   ...type_section.flat()],
-          is = [...uleb128(import_section.length), ...import_section.flat()],
-          fs = [...uleb128(func_section.length),   ...func_section],
-          bs = [...uleb128(table_section.length),  ...flatten_table_section()],
-          as = [...uleb128(tag_section.length),    ...tag_section.flat()],
-          es = [...uleb128(export_section.length), ...export_section.flat()],
-          ls = [...uleb128(elem_section.length),   ...elem_section.flat()],
-          cs = [...uleb128(code_section.length),   ...code_section.flat()],
-          module_code = [
-            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-            1,  ...uleb128(ts.length), ...ts,
-            2,  ...uleb128(is.length), ...is,
-            3,  ...uleb128(fs.length), ...fs,
-            4,  ...uleb128(bs.length), ...bs,
-            13, ...uleb128(as.length), ...as,
-            7,  ...uleb128(es.length), ...es,
-            ...start_section,
-            9,  ...uleb128(ls.length), ...ls,
-            10, ...uleb128(cs.length), ...cs
-          ],
-          buf = Uint8Array.from(module_code),
-          mod = new WebAssembly.Module(buf),
+  function (code) {
+    const module_code = code || build_module_code(false),
+          mod = new WebAssembly.Module(module_code),
           inst = new WebAssembly.Instance(mod, { imports });
     while (start_funcs.length) {
       code_section[start_funcs.pop() - import_num] = [2, 0, 0xb];
@@ -984,13 +1263,20 @@ function slice_source (str) {
 let next_addr;
 
 function build_package () {
-  let func_code = slice_source(build_comp.toString());
-  let init_code = init.toString();
+  let func_code = slice_source(build_comp.toString()),
+      init_code = init.toString();
   func_code += `(${init_code}).call(this,`;
-  func_code += JSON.stringify(module_sections) + ",";
-  const last_addr = Atomics.load(new Uint32Array(memory.buffer), next_addr / 4),
-        mem_arr = Array.from(new Uint32Array(memory.buffer, 0, last_addr / 4));
-  func_code += JSON.stringify(mem_arr) + ");";
+  const last_addr = Atomics.load(new Uint32Array(memory.buffer), next_addr / 4);
+        // mem_arr = Array.from(new Uint32Array(memory.buffer, 0, last_addr / 4));
+        // mem_arr = new Uint32Array(memory.buffer, 0, last_addr / 4);
+  data_section.push(...new Uint8Array(memory.buffer, 0, last_addr));
+  // func_code += JSON.stringify(module_sections) + "," + last_addr + ")";
+  const module_code = build_module_code(true),
+        byte_len = module_code.length,
+        bytes = new Uint8Array(Math.ceil(byte_len / 4) * 4);
+  bytes.set(module_code);
+  func_code += `"${b64_encode(bytes)}",${byte_len},${last_addr});`;
+  // func_code += '"' + b64_encode(mem_arr) + '",' + last_addr + ')';
   if (typeof minify !== "undefined") func_code = minify(func_code).code;
   return func_code;
 }
@@ -6948,14 +7234,16 @@ for (const type of [types.Nil, types.False, types.True]) {
 |           |
 \*---------*/
 
+const compile_form = func_builder();
+
 const lookup_ref = func_builder(function (func) {
-  const func_name = func.param(wasm.i32),
+  const var_name = func.param(wasm.i32),
         out = func.local(wasm.i32);
   func.add_result(wasm.i32);
   func.append_code(
     wasm.i32$const, ...leb128(global_env),
     wasm.call, ...atom_deref.func_idx_leb128,
-    wasm.local$get, ...func_name,
+    wasm.local$get, ...var_name,
     wasm.i32$const, ...leb128(no_entry),
     wasm.call, ...get.func_idx_leb128,
     wasm.local$tee, ...out,
@@ -6963,18 +7251,17 @@ const lookup_ref = func_builder(function (func) {
     wasm.i32$eq,
     wasm.if, wasm.void,
       wasm.i32$const, ...leb128(make_string("invalid reference: ")),
-      wasm.local$get, ...func_name,
+      wasm.local$get, ...var_name,
+// todo: replace with to_string
       wasm.call, ...types.Symbol.fields.name.leb128,
       wasm.call, ...concat_str.func_idx_leb128,
       wasm.call, ...def_exception.func_idx_leb128,
-      wasm.local$get, ...func_name,
+      wasm.local$get, ...var_name,
       wasm.throw, 0,
     wasm.end,
     wasm.local$get, ...out
   );
 });
-
-const compile_form = func_builder();
 
 const emit_code_default = func_builder(function (func) {
   const val = func.param(wasm.i32),
@@ -8926,7 +9213,7 @@ compile_form.build(function (func) {
     wasm.i32$load, 2, 0,
     wasm.local$get, ...out,
     wasm.i32$const, 4,
-    wasm.call, ...free_mem.func_idx_leb128
+    wasm.call, ...free_mem.func_idx_leb128,
   );
 });
 
@@ -10239,11 +10526,11 @@ const eval_stream = func_builder(function (func) {
 
 // !!! package cut
 
-compile();
-
-// !!! package cut
-fs.writeFile("blah", build_package(), () => null);
-// !!! package cut
+if (byte_len) {
+  compile(precompiled);
+} else {
+  compile();
+}
 
 // thread_port = comp.alloc(8);
 
@@ -10291,6 +10578,9 @@ if (!main_env.is_browser) {
   // const argv = process.argv;
   if (argv.compile) {
     try {
+// !!! package cut
+      fs.writeFile("blah.js", build_package(), () => null);
+// !!! package cut
       eval_file(argv.compile);
     } catch (e) {
       if (e instanceof WebAssembly.Exception && e.is(exception_tag))
