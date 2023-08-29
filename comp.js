@@ -24,8 +24,9 @@
 // todo: free Function & VariadicFunction
 // todo: make callable as a library (export init)
 // todo: select features to include in compiled file (reading files, interpreting code, etc)
+// todo: pad module_code with 1-3 bytes, pick smallest b64_encode output
 
-(function init (module_code, byte_len, mem_len) {
+(function init (module_code, byte_len, module_code_offset, mem_len) {
   const is_browser = this === this.window;
   if (is_browser) {
   
@@ -59,7 +60,7 @@
       build_comp(new_worker, init, {
         is_browser: false,
         is_main: true
-      }, argv, global, module_code, byte_len, mem_len);
+      }, argv, global, module_code, byte_len, module_code_offset, mem_len);
     } else {
       workers.parentPort.on("message", function (env) {
         build_comp(new_worker, init, env, argv, global, module_code);
@@ -76,6 +77,7 @@ function build_comp (
   js_imports,
   module_code,
   byte_len,
+  module_code_offset,
   mem_len
 ) {
 
@@ -456,7 +458,7 @@ function b64_encode (arr) {
 	else break;
       }
     }
-    
+ 
     for (let j = 0; j < byt_cnt; j += 3) {
       const char1 = bytes[j],
             char2 = j + 1 < byt_cnt ? bytes[j + 1] : 0;
@@ -477,7 +479,6 @@ function b64_encode (arr) {
 
     byt_cnt = 0;
   }
-
   return string;
 }
 
@@ -639,7 +640,7 @@ function build_module_sections (bytes, idx, [curr, shift]) {
   return [curr, shift];
 }
 
-function b64_decode (string, byte_len) {
+function b64_decode (string, byte_len, offset) {
   let buff_len = Math.ceil(byte_len / 4) * 4,
       len = string.length,
       idx = 0,
@@ -656,7 +657,7 @@ function b64_decode (string, byte_len) {
         arr32 = new Uint32Array(buff),
         arr8 = new Uint8Array(buff, 0, byte_len);
 
-  for (let i = 0; i < len; i += 4) {
+  for (let i = offset; i < len; i += 4) {
     char1 = b64_lookup[string.charCodeAt(i)];
     char2 = b64_lookup[string.charCodeAt(i + 1)];
 
@@ -693,7 +694,7 @@ function b64_decode (string, byte_len) {
   return arr8;
 };
 
-const precompiled = byte_len ? b64_decode(module_code, byte_len) : null;
+const precompiled = byte_len ? b64_decode(module_code, byte_len, module_code_offset) : null;
 
 /*--------------*\
 |                |
@@ -1284,13 +1285,21 @@ function build_package () {
   func_code += `(${init.toString()}).call(this,`;
   const last_addr = new DataView(memory.buffer).getUint32(next_addr, true);
   module_sections[data_section] = new Uint8Array(memory.buffer, 0, last_addr);
-  const module_code = build_module_code(true),
-        byte_len = module_code.length,
-        // length needs to be multiple of 4 to use Uint32Array in b64_encode:
-        bytes = new Uint8Array(Math.ceil(byte_len / 4) * 4);
-  // todo: can we make this faster?
-  bytes.set(module_code);
-  func_code += `"${b64_encode(bytes)}",${byte_len},${last_addr});`;
+  let module_b64, off = 0, byte_len;
+  for (let i = 0; i < 4; i++) {
+    const module_code = build_module_code(true);
+    byte_len = module_code.length;
+    // length needs to be multiple of 4 to use Uint32Array in b64_encode:
+    const bytes = new Uint8Array(Math.ceil((byte_len + off) / 4) * 4);
+    // todo: can we make this faster?
+    bytes.set(module_code, off++);
+    const temp_b64 = b64_encode(bytes);
+    if (!module_b64 || (temp_b64.length < module_b64.length)) {
+      module_b64 = temp_b64;
+    }
+  }
+console.log(last_addr, module_b64.length);
+  func_code += `"${module_b64}",${byte_len},${off},${last_addr});`;
   if (typeof minify !== "undefined") func_code = minify(func_code).code;
   return func_code;
 }
@@ -3559,7 +3568,10 @@ get_string_chunk.implement(types.String, function (func) {
   func.param(wasm.i32);
   func.param(wasm.i32);
   func.add_result(wasm.i32);
-  func.append_code(wasm.local$get, ...str);
+  func.append_code(
+    wasm.local$get, ...str,
+    wasm.call, ...inc_refs.func_idx_leb128
+  );
 });
 
 get_string_chunk.implement(types.File, file_get_string_chunk.func_idx);
@@ -3621,6 +3633,7 @@ const substring_until = func_builder(function (func) {
 const get_codepoint = func_builder(function (func) {
   const str = func.param(wasm.i32),
         idx = func.param(wasm.i32),
+        arr = func.local(wasm.i32),
         org = func.local(wasm.i32),
         len = func.local(wasm.i32),
         num_bytes = func.local(wasm.i32),
@@ -3641,13 +3654,14 @@ const get_codepoint = func_builder(function (func) {
     wasm.i32$const, 4,
     // this converts file to string
     wasm.call, ...substring.func_idx_leb128,
+    wasm.local$tee, ...str,
     wasm.call, ...types.String.fields.arr.leb128,
-    wasm.local$set, ...str,
+    wasm.local$set, ...arr,
     wasm.i32$const, 0,
     wasm.local$set, ...idx,
     wasm.i32$lt_u,
     wasm.if, wasm.void,
-      wasm.local$get, ...str,
+      wasm.local$get, ...arr,
       wasm.local$get, ...idx,
       wasm.call, ...array_get_i8.func_idx_leb128,
       wasm.local$tee, ...byt,
@@ -3717,7 +3731,7 @@ const get_codepoint = func_builder(function (func) {
               wasm.local$get, ...chr,
               wasm.i32$const, 6,
               wasm.i32$shl,
-              wasm.local$get, ...str,
+              wasm.local$get, ...arr,
               wasm.local$get, ...idx,
               wasm.i32$const, 1,
               wasm.i32$add,
@@ -4734,7 +4748,10 @@ const string_matches_from = func_builder(function (func) {
       wasm.local$get, ...from,
       wasm.local$get, ...len,
       wasm.call, ...get_string_chunk.func_idx_leb128,
+      wasm.local$tee, ...sbstr,
       wasm.call, ...string_matches.func_idx_leb128,
+      wasm.local$get, ...sbstr,
+      wasm.call, ...free.func_idx_leb128,
       wasm.local$get, ...str,
       wasm.call, ...free.func_idx_leb128,
     wasm.else,
@@ -4761,11 +4778,17 @@ const string_equiv = func_builder(function (func) {
       wasm.i32$const, 0,
       wasm.local$get, ...len,
       wasm.call, ...get_string_chunk.func_idx_leb128,
+      wasm.local$tee, ...a,
       wasm.local$get, ...b,
       wasm.i32$const, 0,
       wasm.local$get, ...len,
       wasm.call, ...get_string_chunk.func_idx_leb128,
+      wasm.local$tee, ...b,
       wasm.call, ...string_matches.func_idx_leb128,
+      wasm.local$get, ...a,
+      wasm.call, ...free.func_idx_leb128,
+      wasm.local$get, ...b,
+      wasm.call, ...free.func_idx_leb128,
     wasm.else,
       wasm.i32$const, 0,
     wasm.end
@@ -9149,6 +9172,7 @@ const new_env = func_builder(function (func) {
   );
 });
 
+// todo: free here and emit_code
 compile_form.build(function (func) {
   const form = func.param(wasm.i32),
         run_macros = func.param(wasm.i32),
@@ -10035,7 +10059,8 @@ const parse_vector = func_builder(function (func) {
   const str = func.param(wasm.i32),
         idx = func.param(wasm.i32),
         lineno = func.param(wasm.i32),
-        seq = func.local(wasm.i32);
+        seq = func.local(wasm.i32),
+        vec = func.local(wasm.i32);
   func.add_result(wasm.i32, wasm.i32, wasm.i32);
   func.append_code(
     wasm.local$get, ...str,
@@ -10045,14 +10070,18 @@ const parse_vector = func_builder(function (func) {
     wasm.call, ...parse_coll.func_idx_leb128,
     wasm.local$set, ...lineno,
     wasm.local$set, ...idx,
-    wasm.call, ...types.Seq.fields.root.leb128,
     wasm.local$tee, ...seq,
+    wasm.call, ...types.Seq.fields.root.leb128,
+    wasm.local$tee, ...vec,
     wasm.if, wasm.i32,
-      wasm.local$get, ...seq,
+      wasm.local$get, ...vec,
       wasm.call, ...types.VectorSeq.fields.vec.leb128,
+      wasm.call, ...inc_refs.func_idx_leb128,
     wasm.else,
       wasm.i32$const, ...sleb128i32(empty_vector),
     wasm.end,
+    wasm.local$get, ...seq,
+    wasm.call, ...free.func_idx_leb128,
     wasm.local$get, ...idx,
     wasm.local$get, ...lineno
   );
@@ -10107,6 +10136,8 @@ const parse_map = func_builder(function (func) {
         wasm.br, 1,
       wasm.end,
     wasm.end,
+    wasm.local$get, ...seq,
+    wasm.call, ...free.func_idx_leb128,
     wasm.local$get, ...map,
     wasm.local$get, ...idx,
     wasm.local$get, ...lineno
@@ -10218,6 +10249,10 @@ const parse_string = func_builder(function (func) {
             wasm.local$get, ...out,
             wasm.local$get, ...segment,
             wasm.call, ...concat_str.func_idx_leb128,
+            wasm.local$get, ...out,
+            wasm.call, ...free.func_idx_leb128,
+            wasm.local$get, ...segment,
+            wasm.call, ...free.func_idx_leb128,
           wasm.else,
             wasm.local$get, ...segment,
           wasm.end,
@@ -10253,6 +10288,10 @@ const parse_string = func_builder(function (func) {
       wasm.local$get, ...out,
       wasm.local$get, ...segment,
       wasm.call, ...concat_str.func_idx_leb128,
+      wasm.local$get, ...out,
+      wasm.call, ...free.func_idx_leb128,
+      wasm.local$get, ...segment,
+      wasm.call, ...free.func_idx_leb128,
     wasm.else,
       wasm.local$get, ...segment,
     wasm.end,
@@ -10491,7 +10530,6 @@ const eval_stream = func_builder(function (func) {
   const str = func.param(wasm.i32),
         stage = func.param(wasm.i32),
         idx = func.local(wasm.i32),
-        out = func.local(wasm.i32),
         lineno = func.local(wasm.i32);
   func.set_export("eval_stream");
   func.append_code(
@@ -10510,12 +10548,9 @@ const eval_stream = func_builder(function (func) {
           wasm.call, ...read_form.func_idx_leb128,
           wasm.local$set, ...lineno,
           wasm.local$set, ...idx,
-          wasm.local$tee, ...out,
           wasm.local$get, ...stage,
           wasm.call, ...stage_or_interpret_form.func_idx_leb128,
           wasm.drop,
-          //wasm.local$get, ...out,
-          //wasm.call, ...free.func_idx_leb128,
           wasm.br, 1,
         // wasm.catch_all,
         //   wasm.local$get, ...lineno,
@@ -10532,6 +10567,9 @@ const eval_stream = func_builder(function (func) {
 // END COMP
 
 // !!! package cut
+
+console.timeEnd("all");
+console.time("core");
 
 // if the file is not compiled, only need compile() once
 // if it's compiled and has a start_section (i.e. was parsed)
@@ -10577,12 +10615,10 @@ if (byte_len) compile(precompiled);
 
 // start_thread();
 
-console.timeEnd("all");
-console.time("core");
-
 function eval_file (f, stage) {
-  const fd = fs.openSync(f, "r");
-  comp.eval_stream(comp.File(fd), stage);
+  const file = comp.File(fs.openSync(f, "r"));
+  comp.eval_stream(file, stage);
+  comp.free(file);
 }
 
 if (!main_env.is_browser) {
