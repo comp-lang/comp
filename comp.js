@@ -1286,19 +1286,19 @@ function build_package () {
   const last_addr = new DataView(memory.buffer).getUint32(next_addr, true);
   module_sections[data_section] = new Uint8Array(memory.buffer, 0, last_addr);
   let module_b64, off = 0, byte_len;
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 4; i++, off++) {
     const module_code = build_module_code(true);
     byte_len = module_code.length;
     // length needs to be multiple of 4 to use Uint32Array in b64_encode:
     const bytes = new Uint8Array(Math.ceil((byte_len + off) / 4) * 4);
     // todo: can we make this faster?
-    bytes.set(module_code, off++);
+    bytes.set(module_code, off);
     const temp_b64 = b64_encode(bytes);
     if (!module_b64 || (temp_b64.length < module_b64.length)) {
       module_b64 = temp_b64;
+      break;
     }
   }
-console.log(last_addr, module_b64.length);
   func_code += `"${module_b64}",${byte_len},${off},${last_addr});`;
   if (typeof minify !== "undefined") func_code = minify(func_code).code;
   return func_code;
