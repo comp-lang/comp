@@ -610,16 +610,16 @@ function build_module_section (curr, byt) {
   return next;
 }
 
-function build_module_sections (bytes, idx, [curr, shift]) {
+function build_module_sections (bytes, idx, end, [curr, shift]) {
   let next;
-  if (idx >= 8) {
-    for (let i = 0; i < 4; i++, idx++) {
+  for (let i = idx; i < end; i++) {
+    if (i >= 8) {
       if (!curr.type) {
-        curr = build_module_section(curr, bytes[idx]);
+        curr = build_module_section(curr, bytes[i]);
       } else if (curr.varints) {
-        if (curr.type < 0) curr.prev.content.push(bytes[idx]);
-        curr.cnt |= (bytes[idx] & 0x7f) << shift;
-        if (bytes[idx] & 0x80) {
+        if (curr.type < 0) curr.prev.content.push(bytes[i]);
+        curr.cnt |= (bytes[i] & 0x7f) << shift;
+        if (bytes[i] & 0x80) {
           shift += 7;
         } else {
           curr.varints--;
@@ -633,7 +633,7 @@ function build_module_sections (bytes, idx, [curr, shift]) {
           }
         }
       } else {
-        curr = build_module_section(curr, bytes[idx]);
+        curr = build_module_section(curr, bytes[i]);
       }
     }
   }
@@ -641,7 +641,7 @@ function build_module_sections (bytes, idx, [curr, shift]) {
 }
 
 function b64_decode (string, byte_len, offset) {
-  let buff_len = Math.ceil(byte_len / 4) * 4,
+  let buff_len = Math.ceil((byte_len + offset) / 4) * 4,
       len = string.length,
       idx = 0,
       char1,
@@ -655,9 +655,9 @@ function b64_decode (string, byte_len, offset) {
 
   const buff = new ArrayBuffer(buff_len),
         arr32 = new Uint32Array(buff),
-        arr8 = new Uint8Array(buff, 0, byte_len);
+        arr8 = new Uint8Array(buff, offset, byte_len);
 
-  for (let i = offset; i < len; i += 4) {
+  for (let i = 0; i < len; i += 4) {
     char1 = b64_lookup[string.charCodeAt(i)];
     char2 = b64_lookup[string.charCodeAt(i + 1)];
 
@@ -682,8 +682,10 @@ function b64_decode (string, byte_len, offset) {
       if (bytes[j] & 0x80) {
         shift += 7;
       } else {
+        const start_byte = Math.max(idx * 4, offset) - offset;
         arr32[idx++] = num;
-        mod_sec_data = build_module_sections(arr8, (idx - 1) * 4, mod_sec_data);
+        const end_byte = idx * 4 - offset;
+        mod_sec_data = build_module_sections(arr8, start_byte, end_byte, mod_sec_data);
         num = 0;
         shift = 0;
         if (idx === buff_len) break;
@@ -1285,18 +1287,18 @@ function build_package () {
   func_code += `(${init.toString()}).call(this,`;
   const last_addr = new DataView(memory.buffer).getUint32(next_addr, true);
   module_sections[data_section] = new Uint8Array(memory.buffer, 0, last_addr);
-  let module_b64, off = 0, byte_len;
-  for (let i = 0; i < 4; i++, off++) {
-    const module_code = build_module_code(true);
-    byte_len = module_code.length;
+  let module_b64, off;
+  const module_code = build_module_code(true),
+        byte_len = module_code.length;
+  for (let i = 0; i < 4; i++) {
     // length needs to be multiple of 4 to use Uint32Array in b64_encode:
-    const bytes = new Uint8Array(Math.ceil((byte_len + off) / 4) * 4);
+    const bytes = new Uint8Array(Math.ceil((byte_len + i) / 4) * 4);
     // todo: can we make this faster?
-    bytes.set(module_code, off);
+    bytes.set(module_code, i);
     const temp_b64 = b64_encode(bytes);
     if (!module_b64 || (temp_b64.length < module_b64.length)) {
       module_b64 = temp_b64;
-      break;
+      off = i;
     }
   }
   func_code += `"${module_b64}",${byte_len},${off},${last_addr});`;
@@ -9173,6 +9175,7 @@ const new_env = func_builder(function (func) {
 });
 
 // todo: free here and emit_code
+// start here
 compile_form.build(function (func) {
   const form = func.param(wasm.i32),
         run_macros = func.param(wasm.i32),
