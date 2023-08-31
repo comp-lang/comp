@@ -87,6 +87,19 @@
               (recur))
             (concat-str new-s ")")))))))
 
+(def 'syms (atom {}))
+
+(impl expand-form Symbol
+  (fn _ [s]
+    (let [s* (get (deref syms) s nil)]
+      (if s*
+        s*
+        (throw s
+          (concat-str "symbol not found:  " (str s))
+          )))))
+
+c
+
 (defmethod 'invoke 2 nil)
 
 (impl invoke VariadicFunction
