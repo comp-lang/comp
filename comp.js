@@ -1198,6 +1198,8 @@ const impl_method = import_func(
   function (mtd_num, type_num, func_num) {
     const mtd_table = module_sections[table_section][mtd_num];
     if (mtd_table[2] <= type_num) mtd_table[2] = type_num + 1;
+// todo: track already implemented and overwrite instead of
+// pushing new implementation
     module_sections[elem_section].push([
       2, ...uleb128i32(mtd_num),
       wasm.i32$const, ...sleb128i32(type_num), wasm.end, 
@@ -2123,7 +2125,7 @@ define_type(
   "hash", "i32", 1, 0, 0,
   "num", "i32", 0, 0, 0,
   "default_func", "i32", 0, 0, 0,
-  "main_func", "i32", 0, 0, 0
+  "main_func", "i32", 0, 0, wasm.i32
 );
 
 define_type(
@@ -2451,7 +2453,10 @@ const add_params_to_main_mtd_func = func_builder(function (func) {
 const finish_mtd_main_func = func_builder(function (func) {
   const main_func = func.param(wasm.i32),
         type_idx = func.param(wasm.i32),
-        poly_table = func.param(wasm.i32);
+        poly_table = func.param(wasm.i32),
+        i32_params = func.param(wasm.i32),
+        i64_params = func.param(wasm.i32),
+        f64_params = func.param(wasm.i32);
   func.add_result(wasm.i32);
   func.append_code(
     // get the first arg
@@ -2474,7 +2479,16 @@ const finish_mtd_main_func = func_builder(function (func) {
     wasm.call, ...append_varuint32.func_idx_leb128,
     wasm.local$get, ...poly_table,
     wasm.call, ...append_varuint32.func_idx_leb128,
-    wasm.call, ...end_func.func_idx_leb128
+    wasm.call, ...end_func.func_idx_leb128,
+    wasm.local$tee, ...main_func,
+    wasm.local$get, ...main_func,
+    wasm.call, ...add_to_func_table.func_idx_leb128,
+    wasm.local$get, ...type_idx,
+    wasm.i32$const, ...sleb128i32(wasm.i32),
+    wasm.local$get, ...i32_params,
+    wasm.local$get, ...i64_params,
+    wasm.local$get, ...f64_params,
+    wasm.call, ...types.Function.constr.leb128
   );
 });
 
@@ -2525,6 +2539,9 @@ const new_comp_method = func_builder(function (func) {
     wasm.local$get, ...main_func,
     wasm.local$get, ...type_idx,
     wasm.local$get, ...mtd_table,
+    wasm.local$get, ...i32_params,
+    wasm.local$get, ...i64_params,
+    wasm.local$get, ...f64_params,
     wasm.call, ...finish_mtd_main_func.func_idx_leb128,
     wasm.local$get, ...mtd_table
   );
@@ -2544,14 +2561,16 @@ function def_mtd (name, num_i32, num_i64, num_f64, res, def_func) {
     name ? sleb128i32(store_ref(name)) : [0],
     num_i32, num_i64, num_f64, res,
   );
+  const func_idx = comp.Function$func_num(mtd_func);
   return {
     name: name,
     mtd_num: mtd_num,
     num_args: num_i32 + num_i64 + num_f64,
     def_func: def_func.func_idx,
     def_func_leb128: def_func.func_idx_leb128,
-    func_idx: mtd_func,
-    func_idx_leb128: uleb128i32(mtd_func),
+    func_idx: func_idx,
+    func_idx_leb128: uleb128i32(func_idx),
+    main_func: mtd_func,
     implemented: {},
     implement: function (type, func) {
       this.implemented[type.name] = true;
@@ -6582,7 +6601,7 @@ for (const m of defined_methods) {
 function new_method (name, num_args, result, def_func) {
 // todo: should all methods be exported? if not, don't pass name
   const out = def_mtd(name, num_args, 0, 0, result, def_func),
-        mtd = comp.store_method(out.mtd_num, out.def_func, out.func_idx);
+        mtd = comp.store_method(out.mtd_num, out.def_func, out.main_func);
   comp.impl_def_func_all_types(mtd);
   comp.store_binding(make_symbol(name), mtd, global_env);
   return out;
@@ -6696,7 +6715,6 @@ comp.store_comp_func(
   }).func_idx
 );
 
-comp.store_comp_func(make_symbol("conj"), 2, 0, 0, wasm.i32, conj.func_idx);
 comp.store_comp_func(make_symbol("get"), 3, 0, 0, wasm.i32, get.func_idx);
 comp.store_comp_func(make_symbol("seq"), 1, 0, 0, wasm.i32, to_seq.func_idx);
 comp.store_comp_func(make_symbol("first"), 1, 0, 0, wasm.i32, first.func_idx);
@@ -6860,10 +6878,12 @@ comp.store_comp_func(
       wasm.local$set, ...mtd_func,
       wasm.local$get, ...mtd_num,
       wasm.local$get, ...def_func,
+// todo: why not just leave as Method?
       wasm.call, ...types.Method.predicate_leb128,
       wasm.if, wasm.i32,
         wasm.local$get, ...def_func,
         wasm.call, ...types.Method.fields.main_func.leb128,
+        wasm.call, ...types.Function.fields.func_num.leb128,
         wasm.local$tee, ...def_func,
       wasm.else,
         wasm.local$get, ...def_func,
@@ -7766,6 +7786,7 @@ const emit_func_call = func_builder(function (func) {
         env = func.param(wasm.i32),
         func_record = func.param(wasm.i32),
         args = func.param(wasm.i32),
+        is_func = func.param(wasm.i32),
         cnt = func.local(wasm.i32),
         revert_inner = func.local(wasm.i32),
         revert_inner_idx = func.local(wasm.i32),
@@ -7804,35 +7825,8 @@ const emit_func_call = func_builder(function (func) {
     wasm.end,
     wasm.local$get, ...inner_env,
     wasm.call, ...free.func_idx_leb128,
-    wasm.local$get, ...func_record,
-    wasm.call, ...types.Method.predicate_leb128,
-    wasm.if, wasm.i32,
-      wasm.i32$const, ...sleb128i32(wasm.i32),
-      wasm.local$set, ...result,
-      wasm.local$get, ...func_record,
-      wasm.call, ...types.Method.fields.main_func.leb128,
-    wasm.else,
-      wasm.local$get, ...func_record,
-      wasm.call, ...types.Function.predicate_leb128,
-      wasm.if, wasm.i32,
-        wasm.local$get, ...func_record,
-        wasm.call, ...types.Function.fields.result.leb128,
-        wasm.local$set, ...result,
-        wasm.local$get, ...func_record,
-        wasm.call, ...types.Function.fields.func_num.leb128,
-      wasm.else,
-        wasm.i32$const, 0,
-      wasm.end,
-    wasm.end,
-    wasm.local$tee, ...func_num,
+    wasm.local$get, ...is_func,
     wasm.if, wasm.void,
-      wasm.local$get, ...fn,
-      wasm.i32$const, ...sleb128i32(wasm.call),
-      wasm.call, ...append_code.func_idx_leb128,
-      wasm.local$get, ...func_num,
-      wasm.call, ...append_varuint32.func_idx_leb128,
-      wasm.drop,
-    wasm.else,
       wasm.local$get, ...func_record,
       wasm.local$get, ...fn,
       wasm.local$get, ...env,
@@ -7850,6 +7844,27 @@ const emit_func_call = func_builder(function (func) {
       wasm.call, ...get_type_idx.func_idx_leb128,
       wasm.call, ...append_varuint32.func_idx_leb128,
       wasm.i32$const, 0,
+      wasm.call, ...append_varuint32.func_idx_leb128,
+      wasm.drop,
+    wasm.else,
+      wasm.local$get, ...func_record,
+      wasm.call, ...types.Method.predicate_leb128,
+      wasm.if, wasm.i32,
+        wasm.local$get, ...func_record,
+        wasm.call, ...types.Method.fields.main_func.leb128,
+      wasm.else,
+        wasm.local$get, ...func_record,
+      wasm.end,
+      wasm.local$tee, ...func_record,
+      wasm.call, ...types.Function.fields.result.leb128,
+      wasm.local$set, ...result,
+      wasm.local$get, ...func_record,
+      wasm.call, ...types.Function.fields.func_num.leb128,
+      wasm.local$set, ...func_num,
+      wasm.local$get, ...fn,
+      wasm.i32$const, ...sleb128i32(wasm.call),
+      wasm.call, ...append_code.func_idx_leb128,
+      wasm.local$get, ...func_num,
       wasm.call, ...append_varuint32.func_idx_leb128,
       wasm.drop,
     wasm.end,
@@ -7904,6 +7919,7 @@ def_special_form("call", function (func) {
     wasm.call, ...first.func_idx_leb128,
     wasm.local$get, ...args,
     wasm.call, ...rest.func_idx_leb128,
+    wasm.i32$const, 1,
     wasm.call, ...emit_func_call.func_idx_leb128,
     wasm.local$get, ...fn,
   );
@@ -8874,6 +8890,7 @@ emit_code.implement(types.Seq, function (_func) {
               wasm.local$get, ...env,
               wasm.local$get, ...func_record,
               wasm.local$get, ...args_list,
+              wasm.i32$const, 0,
               wasm.call, ...emit_func_call.func_idx_leb128,
             wasm.end,
           wasm.end,
@@ -9161,6 +9178,9 @@ compile_form.build(function (func) {
 // todo: why does this make no difference?
     //wasm.local$get, ...form,
     //wasm.call, ...free.func_idx_leb128,
+// todo: emit_code should determine if double compilation needed
+// (i.e. if form emited that needs to be compiled)
+    wasm.call, ...compile.func_idx_leb128,
     wasm.call, ...compile.func_idx_leb128,
     wasm.local$get, ...out,
     wasm.i32$load, 2, 0,
@@ -10470,37 +10490,35 @@ const print_lineno = func_builder(function (func) {
 const eval_stream = func_builder(function (func) {
   const str = func.param(wasm.i32),
         stage = func.param(wasm.i32),
-        idx = func.local(wasm.i32),
-        lineno = func.local(wasm.i32);
+        idx = func.param(wasm.i32),
+        lineno = func.param(wasm.i32);
   func.set_export("eval_stream");
+  func.add_result(wasm.i32, wasm.i32);
   func.append_code(
-    wasm.i32$const, 1,
-    wasm.local$set, ...lineno,
-    wasm.loop, wasm.void,
-      wasm.local$get, ...idx,
-      wasm.local$get, ...str,
-      wasm.call, ...string_length.func_idx_leb128,
-      wasm.i32$lt_u,
-      wasm.if, wasm.void,
-        // wasm.try, wasm.void,
-          wasm.local$get, ...str,
-          wasm.local$get, ...idx,
-          wasm.local$get, ...lineno,
-          wasm.call, ...read_form.func_idx_leb128,
-          wasm.local$set, ...lineno,
-          wasm.local$set, ...idx,
-          wasm.local$get, ...stage,
-          wasm.call, ...stage_or_interpret_form.func_idx_leb128,
-          wasm.br, 1,
-        // wasm.catch_all,
-        //   wasm.local$get, ...lineno,
-        //   wasm.call, ...print_lineno.func_idx_leb128,
-        //   wasm.i32$const, def_exception("caught error"),
-        //   wasm.i32$const, 0,
-        //   wasm.throw, 0,
-        // wasm.end,
-      wasm.end,
-    wasm.end
+    wasm.local$get, ...idx,
+    wasm.local$get, ...str,
+    wasm.call, ...string_length.func_idx_leb128,
+    wasm.i32$lt_u,
+    wasm.if, wasm.void,
+      // wasm.try, wasm.void,
+        wasm.local$get, ...str,
+        wasm.local$get, ...idx,
+        wasm.local$get, ...lineno,
+        wasm.call, ...read_form.func_idx_leb128,
+        wasm.local$set, ...lineno,
+        wasm.local$set, ...idx,
+        wasm.local$get, ...stage,
+        wasm.call, ...stage_or_interpret_form.func_idx_leb128,
+      // wasm.catch_all,
+      //   wasm.local$get, ...lineno,
+      //   wasm.call, ...print_lineno.func_idx_leb128,
+      //   wasm.i32$const, def_exception("caught error"),
+      //   wasm.i32$const, 0,
+      //   wasm.throw, 0,
+      // wasm.end,
+    wasm.end,
+    wasm.local$get, ...idx,
+    wasm.local$get, ...lineno
   );
 });
 
@@ -10548,8 +10566,13 @@ console.time("core");
 // start_thread();
 
 function eval_file (f, stage) {
-  const file = comp.File(fs.openSync(f, "r"));
-  comp.eval_stream(file, stage);
+  const fd = fs.openSync(f, "r"),
+        file = comp.File(fd),
+        len = fs.fstatSync(fd).size;
+  let idx = 0, lineno = 0;
+  while (idx < len) {
+    [idx, lineno] = comp.eval_stream(file, stage, idx, lineno);
+  }
   comp.free(file);
 }
 

@@ -87,28 +87,19 @@
               (recur))
             (concat-str new-s ")")))))))
 
-(def 'syms (atom {}))
-
-(impl expand-form Symbol
-  (fn _ [s]
-    (let [s* (get (deref syms) s nil)]
-      (if s*
-        s*
-        (throw s
-          (concat-str "symbol not found:  " (str s))
-          )))))
-
-c
-
 (defmethod 'invoke 2 nil)
 
 (impl invoke VariadicFunction
   (fn _ [f args]
-    (call
+    (invoke
       (VariadicFunction/func f)
       (concat (VariadicFunction/args f) args))))
 
 (impl invoke Function (fn _ [f arg] (call f arg)))
+
+(impl invoke Method
+  (fn _ [m arg]
+    (call (Method/main_func m) arg)))
 
 (def 'map
   (fn map [f coll]
@@ -132,6 +123,20 @@ c
     (Int/new (i64/add (Int/value x) #1))))
 
 (pr (map inc [1 2 3]))
+
+(def 'syms (atom {}))
+
+(impl expand-form Symbol
+  (fn _ [s]
+    (let [s* (get (deref syms) s nil)]
+      (if s*
+        s*
+        (throw s
+          (concat-str "symbol not found: " (str s)))))))
+
+(impl expand-form Seq
+  (fn _ [s]
+    (map expand-form s)))
 
 ;; (def 'filter
 ;;   (fn _ [f coll]
