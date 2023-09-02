@@ -138,17 +138,4 @@
   (fn _ [s]
     (map expand-form s)))
 
-;; (def 'filter
-;;   (fn _ [f coll]
-;;     (Seq
-;;       (seq coll)
-;;       []
-;;       (fn build [source accum]
-;;         (loop [source source]
-;;           (let [x (first source)]
-;;             (if (f x)
-;;               (Seq/new
-;;                 (rest source)
-;;                 (append accum x)
-;;                 build)
-;;               (recur (rest source)))))))))
+(c 1)

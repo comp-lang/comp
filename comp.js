@@ -26,7 +26,7 @@
 // todo: select features to include in compiled file (reading files, interpreting code, etc)
 // todo: review emit_code section to make sure everything is being freed properly
 
-(function init (module_code, byte_len, module_code_offset, mem_len) {
+(function init (module_code, module_len, module_off, parsed_len, mem_len) {
   const is_browser = this === this.window;
   if (is_browser) {
   
@@ -60,7 +60,7 @@
       build_comp(new_worker, init, {
         is_browser: false,
         is_main: true
-      }, argv, global, module_code, byte_len, module_code_offset, mem_len);
+      }, argv, global, module_code, module_len, module_off, parsed_len, mem_len);
     } else {
       workers.parentPort.on("message", function (env) {
         build_comp(new_worker, init, env, argv, global, module_code);
@@ -76,8 +76,9 @@ function build_comp (
   argv,
   js_imports,
   module_code,
-  byte_len,
-  module_code_offset,
+  module_len,
+  module_off,
+  parsed_len,
   mem_len
 ) {
 
@@ -397,7 +398,7 @@ const type_section = module_section_enum++,
       code_section = module_section_enum++,
       data_section = module_section_enum++;
 
-let module_sections = byte_len ? [] : [
+const module_sections = module_len ? [] : [
   [[wasm.func, 1, wasm.i32, 0]],
   [[
     ...wasm_encode_string("imports"),
@@ -421,6 +422,8 @@ let module_sections = byte_len ? [] : [
   [],
   []
 ];
+
+const parsed_forms = new ArrayBuffer(0, { maxByteLength: 2 << 15 });
 
 /*------*\
 |        |
@@ -557,7 +560,7 @@ function build_module_section (curr, byt) {
       // tag section
       case 13:
         if (first) module_sections.push(curr.mod_sec = []);
-      return reader(-1, 0, curr.type === 4 ? 3 : 2, final_next);
+      return reader(-2, curr.type === 4 ? 3 : 2, 0, final_next);
       // export section
       case 7:
         if (first) module_sections.push(curr.mod_sec = []);
@@ -640,8 +643,10 @@ function build_module_sections (bytes, idx, end, [curr, shift]) {
   return [curr, shift];
 }
 
-function b64_decode (string, byte_len, offset) {
-  let buff_len = Math.ceil((byte_len + offset) / 4) * 4,
+function b64_decode (string, module_len, offset, parsed_len) {
+  parsed_forms.resize(parsed_len);
+
+  let buff_len = Math.ceil((module_len + offset) / 4) * 4,
       len = string.length,
       idx = 0,
       char1,
@@ -651,11 +656,13 @@ function b64_decode (string, byte_len, offset) {
       bytes = new Uint8Array(3),
       num = 0,
       shift = 0,
-      mod_sec_data = [{ type: 0, content: [] }, 0];
+      mod_sec_data = [{ type: 0, content: [] }, 0],
+      parsed32_idx = 0;
 
   const buff = new ArrayBuffer(buff_len),
         arr32 = new Uint32Array(buff),
-        arr8 = new Uint8Array(buff, offset, byte_len);
+        arr8 = new Uint8Array(buff, offset, module_len),
+        parsed32 = new Uint32Array(parsed_forms);
 
   for (let i = 0; i < len; i += 4) {
     char1 = b64_lookup[string.charCodeAt(i)];
@@ -683,12 +690,16 @@ function b64_decode (string, byte_len, offset) {
         shift += 7;
       } else {
         const start_byte = Math.max(idx * 4, offset) - offset;
-        arr32[idx++] = num;
-        const end_byte = idx * 4 - offset;
-        mod_sec_data = build_module_sections(arr8, start_byte, end_byte, mod_sec_data);
+        if (start_byte < module_len) {
+          arr32[idx++] = num;
+          const end_byte = idx * 4 - offset;
+          mod_sec_data = build_module_sections(arr8, start_byte, end_byte, mod_sec_data);
+        } else {
+          parsed32[parsed32_idx++] = num;
+        }
         num = 0;
         shift = 0;
-        if (idx === buff_len) break;
+        // if (idx === buff_len) break;
       }
     }
   }
@@ -696,7 +707,10 @@ function b64_decode (string, byte_len, offset) {
   return arr8;
 };
 
-const precompiled = byte_len ? b64_decode(module_code, byte_len, module_code_offset) : null;
+let precompiled = null;
+
+if (module_len)
+  precompiled = b64_decode(module_code, module_len, module_off, parsed_len);
 
 /*--------------*\
 |                |
@@ -1293,19 +1307,22 @@ function build_package () {
   module_sections[data_section] = new Uint8Array(memory.buffer, 0, last_addr);
   let module_b64, off;
   const module_code = build_module_code(true),
-        byte_len = module_code.length;
+        module_len = module_code.length,
+        parsed_len = parsed_forms.byteLength,
+        full_len = module_len + parsed_len;
   for (let i = 0; i < 4; i++) {
     // length needs to be multiple of 4 to use Uint32Array in b64_encode:
-    const bytes = new Uint8Array(Math.ceil((byte_len + i) / 4) * 4);
+    const bytes = new Uint8Array(Math.ceil((full_len + i) / 4) * 4);
     // todo: can we make this faster?
     bytes.set(module_code, i);
+    bytes.set(new Uint8Array(parsed_forms), module_len + i);
     const temp_b64 = b64_encode(bytes);
     if (!module_b64 || (temp_b64.length < module_b64.length)) {
       module_b64 = temp_b64;
       off = i;
     }
   }
-  func_code += `"${module_b64}",${byte_len},${off},${last_addr});`;
+  func_code += `"${module_b64}",${module_len},${off},${parsed_len},${last_addr});`;
   if (typeof minify !== "undefined") func_code = minify(func_code).code;
   return func_code;
 }
@@ -1383,6 +1400,7 @@ const file_get_string_chunk = import_func(
   3, 0, 0, [wasm.i32],
   function (fstr, start, len) {
     const arr = comp.array_by_length(Math.ceil(len / 4)),
+// todo: update global DataView when memory grows
           buf = new DataView(memory.buffer),
           fd = comp.File$fd(fstr),
           br = fs.readSync(fd, buf, comp.Array$arr(arr), len, start);
@@ -9190,42 +9208,6 @@ compile_form.build(function (func) {
   );
 });
 
-const stage_or_interpret_form = func_builder(
-  2, 0, 0, [],
-  function (form, stage) {
-    // const split = this.local(wasm.i32),
-    //       idx = this.local(wasm.i32);
-    return [
-      wasm.local$get, ...stage,
-      wasm.if, wasm.void,
-        wasm.call, ...start_func.func_idx_leb128,
-        wasm.i32$const, ...sleb128i32(wasm.i32$const),
-        wasm.call, ...append_code.func_idx_leb128,
-        wasm.local$get, ...form,
-        wasm.call, ...append_varsint32.func_idx_leb128,
-        wasm.i32$const, ...sleb128i32(wasm.i32$const),
-        wasm.call, ...append_code.func_idx_leb128,
-        wasm.i32$const, 1,
-        wasm.call, ...append_varsint32.func_idx_leb128,
-        wasm.i32$const, ...sleb128i32(wasm.call),
-        wasm.call, ...append_code.func_idx_leb128,
-        wasm.i32$const, ...sleb128i32(compile_form.func_idx),
-        wasm.call, ...append_varuint32.func_idx_leb128,
-        wasm.i32$const, ...sleb128i32(wasm.drop),
-        wasm.call, ...append_code.func_idx_leb128,
-        wasm.call, ...end_func.func_idx_leb128,
-        wasm.call, ...add_to_start_func.func_idx_leb128,
-      wasm.else,
-        wasm.local$get, ...form,
-        wasm.i32$const, 1,
-        wasm.call, ...compile_form.func_idx_leb128,
-        wasm.call, ...free.func_idx_leb128,
-      wasm.end
-    ];
-  }
-);
-
-
 /*------------*\
 |              |
 | parsing text |
@@ -10489,11 +10471,12 @@ const print_lineno = func_builder(function (func) {
 
 const eval_stream = func_builder(function (func) {
   const str = func.param(wasm.i32),
-        stage = func.param(wasm.i32),
+        interpret = func.param(wasm.i32),
         idx = func.param(wasm.i32),
-        lineno = func.param(wasm.i32);
+        lineno = func.param(wasm.i32),
+        form = func.local(wasm.i32);
   func.set_export("eval_stream");
-  func.add_result(wasm.i32, wasm.i32);
+  func.add_result(wasm.i32, wasm.i32, wasm.i32);
   func.append_code(
     wasm.local$get, ...idx,
     wasm.local$get, ...str,
@@ -10507,8 +10490,14 @@ const eval_stream = func_builder(function (func) {
         wasm.call, ...read_form.func_idx_leb128,
         wasm.local$set, ...lineno,
         wasm.local$set, ...idx,
-        wasm.local$get, ...stage,
-        wasm.call, ...stage_or_interpret_form.func_idx_leb128,
+        wasm.local$set, ...form,
+        wasm.local$get, ...interpret,
+        wasm.if, wasm.void,
+          wasm.local$get, ...form,
+          wasm.i32$const, 1,
+          wasm.call, ...compile_form.func_idx_leb128,
+          wasm.call, ...free.func_idx_leb128,
+        wasm.end,
       // wasm.catch_all,
       //   wasm.local$get, ...lineno,
       //   wasm.call, ...print_lineno.func_idx_leb128,
@@ -10517,6 +10506,7 @@ const eval_stream = func_builder(function (func) {
       //   wasm.throw, 0,
       // wasm.end,
     wasm.end,
+    wasm.local$get, ...form,
     wasm.local$get, ...idx,
     wasm.local$get, ...lineno
   );
@@ -10565,13 +10555,23 @@ console.time("core");
 
 // start_thread();
 
-function eval_file (f, stage) {
+function eval_file (f, interpret) {
   const fd = fs.openSync(f, "r"),
         file = comp.File(fd),
-        len = fs.fstatSync(fd).size;
-  let idx = 0, lineno = 0;
+        len = fs.fstatSync(fd).size,
+        a32 = new Uint32Array(parsed_forms);
+  let idx = 0,
+      lineno = 0,
+      form = 0,
+      a_idx = 0,
+      buf_len = 0;
   while (idx < len) {
-    [idx, lineno] = comp.eval_stream(file, stage, idx, lineno);
+    [form, idx, lineno] = comp.eval_stream(file, interpret, idx, lineno);
+    // no need to store nil
+    if (form) {
+      parsed_forms.resize(buf_len += 4);
+      a32[a_idx++] = form;
+    }
   }
   comp.free(file);
 }
@@ -10580,22 +10580,29 @@ function eval_file (f, stage) {
 // if it's compiled and has a start_section (i.e. was parsed)
 // then we need to call compile() here to initialize comp
 // before compiling again with start_func
-if (!byte_len || had_start_section) compile();
+if (!module_len || had_start_section) compile();
 
 // if file was compiled or parsed, we need to initialize
 // memory and (if parsed) call start_func
 try {
-  if (byte_len) compile(precompiled);
+  if (module_len) compile(precompiled);
+
+  if (parsed_forms.byteLength) {
+    const parsed32 = new Uint32Array(parsed_forms);
+    for (let i = 0; i < parsed32.length; i++) {
+      comp.compile_form(parsed32[i], 1);
+    }
+  }
 
   if (!main_env.is_browser) {
     if (argv.compile) {
-      if (argv.compile[0]) eval_file(argv.compile[0], 0);
+      if (argv.compile[0]) eval_file(argv.compile[0], 1);
       fs.writeFile("blah.js", build_package(), () => null);
     } else if (argv.parse) {
-      eval_file(argv.parse[0], 1);
+      eval_file(argv.parse[0], 0);
       fs.writeFile("blah.js", build_package(), () => null);
     } else if (argv.interpret) {
-      eval_file(argv.interpret[0], 0);
+      eval_file(argv.interpret[0], 1);
     }
   }
 } catch (e) {
