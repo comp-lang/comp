@@ -13,20 +13,20 @@
 // todo: make field_setters thread safe?
 // todo: gensym/namespace syntax quoted symbol
 // todo: review all values created here (e.g. cached_string()) and consolidate/free
-// todo: using varuint/varsint in all the right places?
 // todo: should String have an array or just a memory block?
+// todo: review what's not needed in a compiled file
 // todo: handle String/File encodings other than UTF8
 // todo: emit number literal directly
 // todo: atom keeps track of past values so it can free them
 // todo: store comp default function in Method so it can be partialed/store local scope
 // todo: make callable as a library (export init)
+// todo: store special characters of string to make escaping easier
 // todo: select features to include in compiled file (reading files, interpreting code, etc)
 // todo: review emit_code section to make sure everything is being freed properly
 // todo: allow setting initial & max memory pages
-// todo: remove unneeded exports after compiling
 // todo: store module_code before parsing, interpret macros & reader macros, & expand forms before storing
+// todo: direct data ops in file (change memory ops to function calls)
 // todo: use eval to compile a form (e.g. in impl) and remove second compile from compile_form
-// todo: emit code when parsing, store to compile later
 
 (function init (module_code, module_len, module_off, parsed_len, mem_len) {
   const is_browser = this === this.window;
@@ -84,8 +84,13 @@ function build_comp (
   mem_len
 ) {
 
+let in_package = false;
+
+begin_package();
+
 const fs = require("fs"),
-      {minify} = require("uglify-js");
+      {minify} = require("uglify-js"),
+      possible_exports = module_len ? null : {};
 
 console.time("all");
 
@@ -158,6 +163,7 @@ function sleb128i32 (num) {
 |          |
 \*--------*/
 
+// todo: how much of this is needed in compiled file?
 const wasm = {
   "unreachable":		0x00,
   "nop":			0x01,
@@ -785,6 +791,9 @@ function func (spec) {
     const func_num = spec.func_idx - import_num;
     module_sections[func_section][func_num] = spec.type_idx;
     if (spec.export) {
+      if (possible_exports) {
+        possible_exports[spec.export] = module_sections[export_section].length;
+      }
       module_sections[export_section].push([
         ...wasm_encode_string(spec.export), 0,
         ...spec.uleb128
@@ -855,7 +864,14 @@ const get_type_idx = import_func(
   }
 );
 
-// !!! package cut
+const print_i32 = import_func(
+  1, 0, 0, [],
+  function (i32) {
+    console.log(i32);
+  }
+);
+
+end_package();
 
 const funcs = {
   comp: [],
@@ -915,7 +931,7 @@ function store_func_for_comp (params, result, func_idx, opts) {
   }
 }
 
-// !!! package cut
+begin_package();
 
 /*---------*\
 |           |
@@ -1288,6 +1304,8 @@ const js_call = import_func(
   }
 );
 
+end_package();
+
 /*-------*\
 |         |
 | package |
@@ -1295,16 +1313,43 @@ const js_call = import_func(
 \*-------*/
 
 function slice_source (str) {
-  const cut_point = `\n// !!! package cut\n`;
-  let start_cut = str.indexOf(cut_point);
+  const package_start = "\nbegin_package();\n",
+        package_end = "\nend_package();\n";
+  let start_cut = str.indexOf(package_start),
+      out = str.slice(0, start_cut);
   while (start_cut > -1) {
-    const cut = str.slice(start_cut + cut_point.length),
-          aft_cut = cut.slice(cut.indexOf(cut_point) + cut_point.length + 1);
-    str = str.slice(0, start_cut);
-    str += aft_cut;
-    start_cut = str.indexOf(cut_point);
+    const end_cut = str.indexOf(package_end, start_cut),
+          cut_point = start_cut + package_start.length;
+    out += str.slice(cut_point, end_cut);
+    start_cut = str.indexOf(package_start, cut_point);
   }
-  return str;
+  return out + "}";
+}
+
+function prune_exports () {
+  const new_exports = [],
+        old_exports = module_sections[export_section];
+  for (let e of [
+    "File",
+    "eval_stream",
+    "File$fd",
+    "array_by_length",
+    "Array$arr",
+    "String",
+    "String$length",
+    "String$arr",
+    "Array$length",
+    "array_get_i32",
+    "to_js",
+    "Object$address",
+    "Object",
+    "free",
+    "compile_form",
+    "Exception$msg"
+  ]) {
+    new_exports.push(old_exports[possible_exports[e]]);
+  }
+  module_sections[export_section] = new_exports;
 }
 
 let next_addr;
@@ -1316,6 +1361,7 @@ function build_package () {
   const last_addr = new DataView(memory.buffer).getUint32(next_addr, true);
   module_sections[data_section] = new Uint8Array(memory.buffer, 0, last_addr);
   let module_b64, off;
+  prune_exports();
   const module_code = build_module_code(true),
         module_len = module_code.length,
         parsed_len = parsed_forms.byteLength,
@@ -1336,6 +1382,16 @@ function build_package () {
   if (typeof minify !== "undefined") func_code = minify(func_code).code;
   return func_code;
 }
+
+function begin_package () {
+  in_package = true;
+}
+
+function end_package () {
+  in_package = false;
+}
+
+begin_package();
 
 /*--------------*\
 |                |
@@ -1445,7 +1501,7 @@ let curr_addr = max_inst_size;
 const comp_false = curr_addr += 4,
       comp_true = curr_addr += 4;
 
-// !!! package cut
+end_package();
 
 /*----*\
 |      |
@@ -1697,7 +1753,12 @@ const make_accessor_func = funcs.build(
       wasm.call, ...start_func.uleb128,
       wasm.local$tee, ..._func,
       wasm.local$get, ...field_name,
-      wasm.call, ...set_export.uleb128,
+      wasm.if, wasm.void,
+        wasm.local$get, ..._func,
+        wasm.local$get, ...field_name,
+        wasm.call, ...set_export.uleb128,
+        wasm.drop,
+      wasm.end,
       // first param is value address
       wasm.i32$const, ...sleb128i32(wasm.i32),
       wasm.call, ...add_param.uleb128,
@@ -1918,9 +1979,14 @@ const end_type = funcs.build(
     type_name
   ) {
     return [
-      wasm.local$get, ...outer_func,
       wasm.local$get, ...type_name,
-      wasm.call, ...set_export.uleb128,
+      wasm.if, wasm.void,
+        wasm.local$get, ...outer_func,
+        wasm.local$get, ...type_name,
+        wasm.call, ...set_export.uleb128,
+        wasm.drop,
+      wasm.end,
+      wasm.local$get, ...outer_func,
       wasm.i32$const, ...sleb128i32(wasm.call),
       wasm.call, ...append_code.uleb128,
       wasm.local$get, ...inner_func,
@@ -1957,7 +2023,7 @@ const types = {};
 
 let next_type_num = 0;
 
-function define_type (type_name, ...fields) {
+function define_type (type_name, xpt_constr, ...fields) {
   let [inner_func, outer_func] = comp.start_type(),
       type_size = 0,
       field_num = 0,
@@ -1969,13 +2035,14 @@ function define_type (type_name, ...fields) {
           type_num: type_num,
           fields: {}
         };
-  fields.unshift("_type_num", "i32", 1, type_num, 0);
-  for (let i = 0; i < fields.length; i += 5) {
+  fields.unshift("_type_num", "i32", 1, type_num, 0, 0);
+  for (let i = 0; i < fields.length; i += 6) {
     const field_name = fields[i],
           field_type = fields[i + 1],
           use_default = fields[i + 2],
           deft = fields[i + 3],
           comp_type = fields[i + 4],
+          xpt = fields[i + 5],
           field_offset = type_size;
     let acc_func;
     if (!use_default) params.push({
@@ -1993,7 +2060,7 @@ function define_type (type_name, ...fields) {
       type_size,
       field_num,
       param_num,
-      store_ref(type_name + "$" + field_name),
+      xpt ? store_ref(type_name + "$" + field_name) : 0,
       wasm[field_type],
       use_default, deft
     );
@@ -2022,7 +2089,7 @@ function define_type (type_name, ...fields) {
     outer_func,
     type_size,
     param_num,
-    store_ref(type_name)
+    xpt_constr ? store_ref(type_name) : 0
   );
   type_info.constr = {
     func_idx: outer_func,
@@ -2035,260 +2102,258 @@ function define_type (type_name, ...fields) {
   type_info.size = type_size;
 }
 
-define_type("Nil");
-define_type("False");
-define_type("True");
+define_type("Nil", 0);
+define_type("False", 0);
+define_type("True", 0);
 
 define_type(
-  "Int",
-  "refs", "i32", 1, 0, 0,
-  "value", "i64", 0, 0, wasm.i64
+  "Int", 0,
+  "refs", "i32", 1, 0, 0, 0,
+  "value", "i64", 0, 0, wasm.i64, 0
 );
 
 define_type(
-  "Float",
-  "refs", "i32", 1, 0, 0,
-  "value", "f64", 0, 0, wasm.f64
+  "Float", 0,
+  "refs", "i32", 1, 0, 0, 0,
+  "value", "f64", 0, 0, wasm.f64, 0
 );
 
 // todo: replace with Int
 define_type(
-  "Boxedi32",
-  "refs", "i32", 1, 0, 0,
-  "value", "i32", 0, 0, 0
+  "Boxedi32", 0,
+  "refs", "i32", 1, 0, 0, 0,
+  "value", "i32", 0, 0, 0, 0
 );
 
 define_type(
-  "Object",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "address", "i32", 0, 0, 0
+  "Object", 1,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "address", "i32", 0, 0, 0, 1
 );
 
 define_type(
-  "String",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "arr", "i32", 0, 0, wasm.i32,
-  "length", "i32", 0, 0, wasm.i64
+  "String", 1,
+  "refs", "i32", 1, 0, 0, 0, 
+  "hash", "i32", 1, 0, 0, 0,
+  "arr", "i32", 0, 0, wasm.i32, 1,
+  "length", "i32", 0, 0, wasm.i64, 1
 );
 
 define_type(
-  "File",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "fd", "i32", 0, 0, wasm.i64
+  "File", 1,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "fd", "i32", 0, 0, wasm.i64, 1
 );
 
 define_type(
-  "Exception",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "data", "i32", 0, 0, wasm.i32,
-  "msg", "i32", 0, 0, wasm.i32
+  "Exception", 0,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "data", "i32", 0, 0, wasm.i32, 0,
+  "msg", "i32", 0, 0, wasm.i32, 1
 );
 
 define_type(
-  "Symbol",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "namespace", "i32", 0, 0, wasm.i32,
-  "name", "i32", 0, 0, wasm.i32
+  "Symbol", 0,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "namespace", "i32", 0, 0, wasm.i32, 0,
+  "name", "i32", 0, 0, wasm.i32, 0
 );
 
 define_type(
-  "Keyword",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "namespace", "i32", 0, 0, wasm.i32,
-  "name", "i32", 0, 0, wasm.i32,
+  "Keyword", 0,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "namespace", "i32", 0, 0, wasm.i32, 0,
+  "name", "i32", 0, 0, wasm.i32, 0
 );
 
 define_type(
-  "Function",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "func_num", "i32", 0, 0, 0,
-  "tbl_idx", "i32", 0, 0, 0,
-  "type_num", "i32", 0, 0, 0,
-  "result",  "i32", 0, 0, wasm.i64,
-  "i32_params", "i32", 0, 0, wasm.i64,
-  "i64_params", "i32", 0, 0, wasm.i64,
-  "f64_params", "i32", 0, 0, wasm.i64
+  "Function", 0,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "func_num", "i32", 0, 0, 0, 1,
+  "tbl_idx", "i32", 0, 0, 0, 0,
+  "type_num", "i32", 0, 0, 0, 0,
+  "result",  "i32", 0, 0, wasm.i64, 0,
+  "i32_params", "i32", 0, 0, wasm.i64, 0,
+  "i64_params", "i32", 0, 0, wasm.i64, 0,
+  "f64_params", "i32", 0, 0, wasm.i64, 0
 );
 
 define_type(
-  "VariadicFunction",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "func", "i32", 0, 0, wasm.i32,
-  "args", "i32", 0, 0, wasm.i32
+  "VariadicFunction", 0,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "func", "i32", 0, 0, wasm.i32, 0,
+  "args", "i32", 0, 0, wasm.i32, 0
 );
 
 define_type(
-  "Method",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "num", "i32", 0, 0, 0,
-  "default_func", "i32", 0, 0, 0,
-  "main_func", "i32", 0, 0, wasm.i32
+  "Method", 0,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "num", "i32", 0, 0, 0, 0,
+  "default_func", "i32", 0, 0, 0, 0,
+  "main_func", "i32", 0, 0, wasm.i32, 0
 );
 
 define_type(
-  "Array",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-// todo: change to "memblk"
-  "arr", "i32", 0, 0, 0,
-// todo: change to "size"
-  "length", "i32", 0, 0, wasm.i64,
-  "original", "i32", 0, 0, 0
+  "Array", 0,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "arr", "i32", 0, 0, 0, 1,
+  "length", "i32", 0, 0, wasm.i64, 1,
+  "original", "i32", 0, 0, 0, 0
 );
 
 define_type(
-  "RefsArray",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "arr", "i32", 0, 0, 0
+  "RefsArray", 0,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "arr", "i32", 0, 0, 0, 0
 );
 
 define_type(
-  "Atom",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "data", "i32", 0, 0, 0,
-  "mutex", "i32", 0, 0, 0
+  "Atom", 1,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "data", "i32", 0, 0, 0, 0,
+  "mutex", "i32", 0, 0, 0, 0
 );
 
 define_type(
-  "TaggedData",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "tag", "i32", 0, 0, wasm.i32,
-  "data", "i32", 0, 0, wasm.i32
+  "TaggedData", 0,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "tag", "i32", 0, 0, wasm.i32, 0,
+  "data", "i32", 0, 0, wasm.i32, 0
 );
 
 define_type(
-  "Metadata",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "meta", "i32", 0, 0, wasm.i32,
-  "data", "i32", 0, 0, wasm.i32
+  "Metadata", 0,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "meta", "i32", 0, 0, wasm.i32, 0,
+  "data", "i32", 0, 0, wasm.i32, 0
 );
 
 define_type(
-  "Type",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "num", "i32", 0, 0, 0
+  "Type", 1,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "num", "i32", 0, 0, 0, 0
 );
 
 define_type(
-  "PartialNode",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "arr", "i32", 0, 0, 0,
-  "bitmap", "i32", 0, 0, 0
+  "PartialNode", 1,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "arr", "i32", 0, 0, 0, 0,
+  "bitmap", "i32", 0, 0, 0, 0
 );
 
 define_type(
-  "FullNode",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "arr", "i32", 0, 0, 0
+  "FullNode", 0,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "arr", "i32", 0, 0, 0, 0
 );
 
 define_type(
-  "HashCollisionNode",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "arr", "i32", 0, 0, 0,
-  "collision_hash", "i32", 0, 0, 0
+  "HashCollisionNode", 0,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "arr", "i32", 0, 0, 0, 0,
+  "collision_hash", "i32", 0, 0, 0, 0
 );
 
 define_type(
-  "LeafNode",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "key", "i32", 0, 0, wasm.i32,
-  "val", "i32", 0, 0, wasm.i32
+  "LeafNode", 0,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "key", "i32", 0, 0, wasm.i32, 0,
+  "val", "i32", 0, 0, wasm.i32, 0
 );
 
 define_type(
-  "HashMap",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "root", "i32", 0, 0, 0,
-  "count", "i32", 0, 0, wasm.i64
+  "HashMap", 1,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "root", "i32", 0, 0, 0, 0,
+  "count", "i32", 0, 0, wasm.i64, 0
 );
 
 define_type(
-  "Vector",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "count", "i32", 0, 0, wasm.i64,
-  "shift", "i32", 0, 0, 0,
-  "root", "i32", 0, 0, 0,
-  "tail", "i32", 0, 0, 0
+  "Vector", 1,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "count", "i32", 0, 0, wasm.i64, 0,
+  "shift", "i32", 0, 0, 0, 0,
+  "root", "i32", 0, 0, 0, 0,
+  "tail", "i32", 0, 0, 0, 0
 );
 
 define_type(
-  "VectorSeq",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "arr", "i32", 0, 0, 0,
-  "arr_off", "i32", 0, 0, 0,
-  "vec", "i32", 0, 0, wasm.i32,
-  "vec_off", "i32", 0, 0, 0
+  "VectorSeq", 0,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "arr", "i32", 0, 0, 0, 0,
+  "arr_off", "i32", 0, 0, 0, 0,
+  "vec", "i32", 0, 0, wasm.i32, 0,
+  "vec_off", "i32", 0, 0, 0, 0
 );
 
 define_type(
-  "HashMapNodeSeq",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "curr_seq", "i32", 0, 0, 0,
-  "nodes", "i32", 0, 0, 0,
-  "offset", "i32", 0, 0, 0
+  "HashMapNodeSeq", 0,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "curr_seq", "i32", 0, 0, 0, 0,
+  "nodes", "i32", 0, 0, 0, 0,
+  "offset", "i32", 0, 0, 0, 0
 );
 
 define_type(
-  "HashMapSeq",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "map", "i32", 0, 0, wasm.i32,
-  "root", "i32", 0, 0, 0
+  "HashMapSeq", 0,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "map", "i32", 0, 0, wasm.i32, 0,
+  "root", "i32", 0, 0, 0, 0
 );
 
 define_type(
-  "LazySeq",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "generator", "i32", 0, 0, 0,
-  "seq", "i32", 0, 0, 0,
-  "seq_set", "i32", 0, 0, 0
+  "LazySeq", 0,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "generator", "i32", 0, 0, 0, 0,
+  "seq", "i32", 0, 0, 0, 0,
+  "seq_set", "i32", 0, 0, 0, 0
 );
 
 define_type(
-  "ConsSeq",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "first", "i32", 0, 0, 0,
-  "rest", "i32", 0, 0, 0
+  "ConsSeq", 0,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "first", "i32", 0, 0, 0, 0,
+  "rest", "i32", 0, 0, 0, 0
 );
 
 define_type(
-  "ConcatSeq",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "left", "i32", 0, 0, 0,
-  "right", "i32", 0, 0, 0
+  "ConcatSeq", 0,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "left", "i32", 0, 0, 0, 0,
+  "right", "i32", 0, 0, 0, 0
 );
 
 define_type(
-  "Seq",
-  "refs", "i32", 1, 0, 0,
-  "hash", "i32", 1, 0, 0,
-  "root", "i32", 0, 0, 0
+  "Seq", 1,
+  "refs", "i32", 1, 0, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "root", "i32", 0, 0, 0, 0
 );
 
 /*-----*\
@@ -2539,7 +2604,7 @@ compile();
 
 const defined_methods = [];
 
-function def_mtd (name, num_i32, num_i64, num_f64, res, opts, def_func) {
+function def_mtd (num_i32, num_i64, num_f64, res, opts, def_func) {
   const params = [];
   for (let i = 0; i < num_i32; i++) params.push(wasm.i32);
   for (let i = 0; i < num_i64; i++) params.push(wasm.i64);
@@ -2553,13 +2618,12 @@ function def_mtd (name, num_i32, num_i64, num_f64, res, opts, def_func) {
     def_func = { func_idx: 0, uleb128: [0], sleb128: [0] };
   }
   const [ mtd_func, mtd_num ] = comp.new_comp_method(
-    name ? sleb128i32(store_ref(name)) : [0],
+    opts.export ? sleb128i32(store_ref(opts.export)) : [0],
     num_i32, num_i64, num_f64, res,
   );
   const func_idx = comp.Function$func_num(mtd_func);
-  store_func_for_comp(params, res, func_idx, opts);
   return {
-    name: name,
+    params,
     mtd_num: mtd_num,
     num_args: num_i32 + num_i64 + num_f64,
     def_func: def_func,
@@ -2580,11 +2644,10 @@ function def_mtd (name, num_i32, num_i64, num_f64, res, opts, def_func) {
   };
 }
 
-// todo: only export when opts.export
-function pre_new_method (name, num_i32, num_i64, num_f64, res, opts, def_func) {
-  num_i64 ||= 0;
-  num_f64 ||= 0;
-  const out = def_mtd(name, num_i32, num_i64, num_f64, res, opts, def_func);
+function pre_new_method (num_i32, num_i64, num_f64, res, opts, def_func) {
+  const out = def_mtd(num_i32, num_i64, num_f64, res, opts, def_func);
+  // store function directly as these methods frequently require wrappers
+  store_func_for_comp(out.params, res, out.func_idx, opts);
   defined_methods.push(out);
   for (let i = 0; i < next_type_num; i++) {
     impl_method(out.mtd_num, i, out.def_func.func_idx);
@@ -2598,7 +2661,7 @@ function pre_new_method (name, num_i32, num_i64, num_f64, res, opts, def_func) {
 |      |
 \*----*/
 
-const free = pre_new_method("free", 1, 0, 0, 0, {});
+const free = pre_new_method(1, 0, 0, 0, { export: "free" });
 
 function impl_free (type, free_self) {
   return free.implement(type, function (val) {
@@ -2643,7 +2706,8 @@ impl_free(types.Boxedi32, (fm) => fm);
 impl_free(types.Int, (fm) => fm);
 impl_free(types.Float, (fm) => fm);
 
-const inc_refs = pre_new_method("inc_refs", 1, 0, 0, wasm.i32, {},
+const inc_refs = pre_new_method(1, 0, 0, wasm.i32,
+  { export: "inc_refs" },
   function (val) {
     return [
       wasm.local$get, ...val,
@@ -3471,7 +3535,7 @@ const pow = funcs.build(
 \*---*/
 
 const i64_to_string = funcs.build(
-  [wasm.i64], [wasm.i32], { comp: "i64_to_string" },
+  [wasm.i64], [wasm.i32], { comp: "i64->string" },
   function (num) {
     const arr = this.local(wasm.i32),
           len = this.local(wasm.i32),
@@ -3602,9 +3666,9 @@ impl_free(types.File, function (free_self) {
 });
 
 const string_length = pre_new_method(
-  "string_length", 1, 0, 0, wasm.i32,
+  1, 0, 0, wasm.i32,
   {
-    comp: "string_length",
+    comp: "string-length",
     comp_wrapper: [wrap_result_i32_to_int]
   }
 );
@@ -3614,7 +3678,7 @@ string_length.implement(types.File, file_length.func_idx);
 
 // converts segment of File to String in situations when
 // we wouldn't need to call substring on a String
-const get_string_chunk = pre_new_method(null, 3, 0, 0, wasm.i32, {});
+const get_string_chunk = pre_new_method(3, 0, 0, wasm.i32, {});
 
 get_string_chunk.implement(types.String, function (str) {
   return [
@@ -3626,7 +3690,7 @@ get_string_chunk.implement(types.String, function (str) {
 get_string_chunk.implement(types.File, file_get_string_chunk.func_idx);
 
 const substring = pre_new_method(
-  "substring", 3, 0, 0, wasm.i32, {
+  3, 0, 0, wasm.i32, {
     comp: "substring",
     comp_wrapper: [wrap_args_int_to_i32([1, 2])]
   }
@@ -3815,8 +3879,8 @@ const get_codepoint = funcs.build(
 );
 
 const index_of_codepoint = pre_new_method(
-  "index_of_codepoint", 2, 0, 0, wasm.i32, {
-    comp: "index_of_codepoint",
+  2, 0, 0, wasm.i32, {
+    comp: "index-of-codepoint",
     comp_wrapper: [
       wrap_args_int_to_i32([1]),
       wrap_result_i32_to_int
@@ -3877,7 +3941,7 @@ const new_string = funcs.build(
 
 // todo: confirm str2 is string
 const concat_str = funcs.build(
-  [wasm.i32, wasm.i32], [wasm.i32], { comp: "concat_str" },
+  [wasm.i32, wasm.i32], [wasm.i32], { comp: "concat-str" },
   function (str1, str2) {
     const len1 = this.local(wasm.i32),
           len2 = this.local(wasm.i32),
@@ -3938,20 +4002,24 @@ impl_free(types.Object, function (free_self) {
 |              |
 \*------------*/
 
-const get = pre_new_method("get", 3, 0, 0, wasm.i32, { comp: "get" }),
-      assoc = pre_new_method("assoc", 3, 0, 0, wasm.i32, { comp: "assoc" }),
-      conj = pre_new_method("conj", 2, 0, 0, wasm.i32, { comp: "conj" }),
-      nth = pre_new_method("nth", 3, 0, 0, wasm.i32, {
+const get = pre_new_method(3, 0, 0, wasm.i32, { comp: "get" }),
+      assoc = pre_new_method(3, 0, 0, wasm.i32, {
+        export: "assoc", comp: "assoc"
+      }),
+      conj = pre_new_method( 2, 0, 0, wasm.i32, {
+        export: "conj", comp: "conj"
+      }),
+      nth = pre_new_method(3, 0, 0, wasm.i32, {
         comp: "nth",
         comp_wrapper: [wrap_args_int_to_i32([1])]
       }),
-      first = pre_new_method("first", 1, 0, 0, wasm.i32, { comp: "first" }),
-      rest = pre_new_method("rest", 1, 0, 0, wasm.i32, { comp: "rest" }),
-      count = pre_new_method("count", 1, 0, 0, wasm.i32, {
+      first = pre_new_method(1, 0, 0, wasm.i32, { comp: "first" }),
+      rest = pre_new_method(1, 0, 0, wasm.i32, { comp: "rest" }),
+      count = pre_new_method(1, 0, 0, wasm.i32, {
         comp: "count",
         comp_wrapper: [wrap_result_i32_to_int]
       }),
-      to_seq = pre_new_method("to_seq", 1, 0, 0, wasm.i32, { comp: "to_seq" });
+      to_seq = pre_new_method(1, 0, 0, wasm.i32, { comp: "to-seq" });
 
 /*------*\
 |        |
@@ -4564,7 +4632,7 @@ const hash_id = function (val) {
   return [wasm.local$get, ...val];
 }
 
-const hash = pre_new_method("hash", 1, 0, 0, wasm.i32, {
+const hash = pre_new_method(1, 0, 0, wasm.i32, {
   comp: "hash",
   comp_wrapper: [wrap_result_i32_to_int]
 }, hash_id);
@@ -4664,9 +4732,7 @@ impl_hash_symkw(types.Keyword);
 |    |
 \*--*/
 
-const equiv = pre_new_method(null, 2, 0, 0, wasm.i32, {}, function (a, b) {
-  return [wasm.i32$const, 0];
-});
+const equiv = pre_new_method(2, 0, 0, wasm.i32, {}, () => [wasm.i32$const, 0]);
 
 const string_matches = funcs.build(
   [wasm.i32, wasm.i32], [wasm.i32], {},
@@ -4910,8 +4976,8 @@ const empty_partial_node = comp.PartialNode(empty_refs_array, 0),
 // todo: start with full_node, implement node methods for nil
       empty_hash_map = comp.HashMap(empty_partial_node, 0);
 
-const map_node_assoc = pre_new_method(null, 6, 0, 0, wasm.i32, {}),
-      map_node_lookup = pre_new_method(null, 4, 0, 0, wasm.i32, {});
+const map_node_assoc = pre_new_method(6, 0, 0, wasm.i32, {}),
+      map_node_lookup = pre_new_method(4, 0, 0, wasm.i32, {});
 
 impl_free(types.PartialNode, function (free_self) {
   const node = [0];
@@ -6368,7 +6434,7 @@ for (const type_name in types) {
   comp.atom_swap_set(comp_types, ts);
   comp.store_binding(make_symbol(type_name), type, global_env);
   const pred = pre_new_method(
-    `${type_name}$instance`, 1, 0, 0, wasm.i32,
+    1, 0, 0, wasm.i32,
     {
       comp: `${type_name}$instance`,
       comp_wrapper: [wrap_result_i32_to_bool]
@@ -6502,13 +6568,11 @@ for (const m of defined_methods) {
   comp.store_method(m.mtd_num, m.def_func.func_idx, m.func_idx);
 }
 
-// todo: only export when opts.export
 function new_method (name, num_args, result, opts, def_func) {
-// todo: should all methods be exported? if not, don't pass name
-  const out = def_mtd(name, num_args, 0, 0, result,  opts, def_func),
+  const out = def_mtd(num_args, 0, 0, result,  opts, def_func),
         mtd = comp.store_method(out.mtd_num, out.def_func.func_idx, out.main_func);
   comp.impl_def_func_all_types(mtd);
-  comp.store_binding(make_symbol(name), mtd, global_env);
+  if (opts.comp) comp.store_binding(make_symbol(opts.comp), mtd, global_env);
   return out;
 }
 
@@ -6518,7 +6582,7 @@ function new_method (name, num_args, result, opts, def_func) {
 |       |
 \*-----*/
 
-const to_js = new_method("to_js", 1, wasm.i32, { comp: "to_js" });
+const to_js = new_method("to_js", 1, wasm.i32, { export: "to_js", comp: "to-js" });
 
 to_js.implement(types.String, function (str) {
   return [
@@ -6538,7 +6602,7 @@ const deref = new_method("deref", 1, wasm.i32, { comp: "deref" });
 
 deref.implement(types.Atom, atom_deref.func_idx);
 
-const reset = new_method("reset", 2, wasm.i32, { comp: "reset" });
+const reset = new_method("reset", 2, wasm.i32, { comp: "reset!" });
 
 reset.implement(types.Atom, function (atom, val) {
   return [
@@ -6604,10 +6668,12 @@ funcs.build(
           mtd_num = this.local(wasm.i32);
     return [
       wasm.local$get, ...mtd_name,
-      wasm.local$get, ...mtd_name,
-      // expects no namespace (use $)
-      wasm.call, ...types.Symbol.fields.name.uleb128,
-      wasm.call, ...store_string.uleb128,
+      wasm.i32$const, nil,
+// todo: export method with opts
+      // wasm.local$get, ...mtd_name,
+      // // expects no namespace (use $)
+      // wasm.call, ...types.Symbol.fields.name.uleb128,
+      // wasm.call, ...store_string.uleb128,
       wasm.local$get, ...num_args,
       wasm.call, ...types.Int.fields.value.uleb128,
       wasm.i32$wrap_i64,
@@ -6786,8 +6852,10 @@ funcs.build(
       wasm.local$get, ...outer_constr,
       wasm.local$get, ...type_size,
       wasm.local$get, ...param_num,
-      wasm.local$get, ...type_name,
-      wasm.call, ...store_string.uleb128,
+      wasm.i32$const, nil,
+// todo: allow exporting, then remove nil
+      // wasm.local$get, ...type_name,
+      // wasm.call, ...store_string.uleb128,
       wasm.call, ...end_type.uleb128,
       wasm.local$set, ...type_size,
       wasm.local$set, ...param_num,
@@ -6803,7 +6871,7 @@ funcs.build(
       wasm.call, ...store_comp_func.uleb128,
   
 // todo: how to namespace this?
-      wasm.i32$const, ...sleb128i32(nil),
+      wasm.i32$const, nil,
       wasm.local$get, ...type_name,
       wasm.call, ...symbol.uleb128,
       wasm.local$get, ...type_num,
@@ -6826,6 +6894,17 @@ funcs.build(
       wasm.local$get, ...fnc,
       wasm.call, ...types.Function.fields.func_num.uleb128,
       wasm.call, ...impl_method.uleb128,
+      wasm.i32$const, nil
+    ];
+  }
+);
+
+funcs.build(
+  [wasm.i32], [wasm.i32], { comp: "free" },
+  function (val) {
+    return [
+      wasm.local$get, ...val,
+      wasm.call, ...free.uleb128,
       wasm.i32$const, nil
     ];
   }
@@ -6931,11 +7010,7 @@ const emit_code_default = funcs.build(
       wasm.i32$const, ...sleb128i32(wasm.i32$const),
       wasm.call, ...append_code.uleb128,
       wasm.local$get, ...val,
-      wasm.call, ...append_varsint32.uleb128,
-      wasm.i32$const, ...sleb128i32(wasm.call),
-      wasm.call, ...append_code.uleb128,
-      wasm.i32$const, ...off_local_refs.sleb128,
-      wasm.call, ...append_varuint32.uleb128,
+      wasm.call, ...append_varsint32.uleb128
     ];
   }
 );
@@ -6945,6 +7020,7 @@ const emit_code = new_method("emit_code", 3, wasm.i32, {}, emit_code_default);
 emit_code.implement(types.Symbol, function (sym, func, env) {
   const bdg_val = this.local(wasm.i32);
   return [
+// todo: treat every symbol as local
     wasm.local$get, ...env,
     wasm.local$get, ...sym,
     wasm.i32$const, nil,
@@ -7095,19 +7171,6 @@ const get_locals_array = funcs.build(
   }
 );
 
-const get_locals_to_free = funcs.build(
-  [wasm.i32], [wasm.i32], {},
-  function (env) {
-    return [
-      wasm.local$get, ...env,
-      wasm.i32$const, ...sleb128i32(make_keyword("locals-to-free")),
-      wasm.i32$const, nil,
-      wasm.call, ...get.uleb128,
-      wasm.call, ...atom_deref.uleb128
-    ];
-  }
-);
-
 const comp_func_set_params = funcs.build(
   [wasm.i32, wasm.i32, wasm.i32],
   [wasm.i32, wasm.i32, wasm.i32, wasm.i32, wasm.i32, wasm.i32],
@@ -7145,9 +7208,8 @@ const comp_func_set_params = funcs.build(
       wasm.i32$const, ...sleb128i32(make_keyword("revert-local-refs")),
       wasm.i32$const, nil,
       wasm.call, ...assoc.uleb128,
-// todo: need to confirm map has changed before freeing
-      // wasm.local$get, ...env,
-      // wasm.call, ...free.uleb128,
+      wasm.local$get, ...env,
+      wasm.call, ...free.uleb128,
       wasm.local$set, ...env,
       wasm.local$get, ...func,
       wasm.local$get, ...config,
@@ -7167,6 +7229,8 @@ const comp_func_set_params = funcs.build(
       wasm.else,
         wasm.local$get, ...config,
       wasm.end,
+      wasm.local$get, ...config,
+      wasm.call, ...free.uleb128,
       wasm.local$tee, ...config,
       wasm.i32$const, ...sleb128i32(make_keyword("params")),
       wasm.i32$const, nil,
@@ -7369,7 +7433,7 @@ function def_special_form (nm, fn) {
     special_forms, sym,
     comp.make_comp_func(fn.func_idx, 3, 0, 0, wasm.i32)
   );
-  // allows is_num64 to work when detecting type of local in let
+  // avoids exception in lookup_ref
   comp.store_binding(sym, nil, global_env);
   comp.free(sf);
 }
@@ -7441,10 +7505,10 @@ const stage_val_to_free = funcs.build(
           revert_outer_idx = this.local(wasm.i32);
     return [
       wasm.local$get, ...func,
-      wasm.i32$const, ...sleb128i32(wasm.call),
-      wasm.call, ...append_code.uleb128,
-      wasm.i32$const, ...inc_refs.sleb128,
-      wasm.call, ...append_varsint32.uleb128,
+      // wasm.i32$const, ...sleb128i32(wasm.call),
+      // wasm.call, ...append_code.uleb128,
+      // wasm.i32$const, ...inc_refs.sleb128,
+      // wasm.call, ...append_varsint32.uleb128,
       wasm.i32$const, ...sleb128i32(wasm.local$tee),
       wasm.call, ...append_code.uleb128,
       wasm.local$get, ...env,
@@ -7453,37 +7517,37 @@ const stage_val_to_free = funcs.build(
       wasm.i32$const, ...sleb128i32(wasm.i32),
       wasm.call, ...inc_locals.uleb128,
       wasm.local$tee, ...loc_num,
-      wasm.local$get, ...env,
-      wasm.i32$const, ...sleb128i32(wasm.i32),
-      wasm.call, ...add_to_locals_to_free.uleb128,
+      // wasm.local$get, ...env,
+      // wasm.i32$const, ...sleb128i32(wasm.i32),
+      // wasm.call, ...add_to_locals_to_free.uleb128,
       wasm.call, ...append_varuint32.uleb128,
       wasm.drop,
-      wasm.local$get, ...env,
-      wasm.i32$const, ...sleb128i32(make_keyword("revert-local-refs")),
-      wasm.i32$const, nil,
-      wasm.call, ...get.uleb128,
-      wasm.local$tee, ...revert_outer,
-      wasm.if, wasm.void,
-        wasm.local$get, ...func,
-        wasm.i32$const, ...sleb128i32(wasm.call),
-        wasm.call, ...append_code.uleb128,
-        wasm.i32$const, ...off_local_refs.sleb128,
-        wasm.call, ...append_varuint32.uleb128,
-        wasm.drop,
-        wasm.local$get, ...revert_outer,
-        wasm.i32$const, 0,
-        wasm.local$get, ...revert_outer,
-        wasm.i32$const, 0,
-        wasm.call, ...array_get_i32.uleb128,
-        wasm.i32$const, 1,
-        wasm.i32$add,
-        wasm.local$tee, ...revert_outer_idx,
-        wasm.call, ...array_set_i32.uleb128,
-        wasm.local$get, ...revert_outer_idx,
-        wasm.local$get, ...loc_num,
-        wasm.call, ...array_set_i32.uleb128,
-        wasm.drop,
-      wasm.end
+      // wasm.local$get, ...env,
+      // wasm.i32$const, ...sleb128i32(make_keyword("revert-local-refs")),
+      // wasm.i32$const, nil,
+      // wasm.call, ...get.uleb128,
+      // wasm.local$tee, ...revert_outer,
+      // wasm.if, wasm.void,
+      //   wasm.local$get, ...func,
+      //   wasm.i32$const, ...sleb128i32(wasm.call),
+      //   wasm.call, ...append_code.uleb128,
+      //   wasm.i32$const, ...off_local_refs.sleb128,
+      //   wasm.call, ...append_varuint32.uleb128,
+      //   wasm.drop,
+      //   wasm.local$get, ...revert_outer,
+      //   wasm.i32$const, 0,
+      //   wasm.local$get, ...revert_outer,
+      //   wasm.i32$const, 0,
+      //   wasm.call, ...array_get_i32.uleb128,
+      //   wasm.i32$const, 1,
+      //   wasm.i32$add,
+      //   wasm.local$tee, ...revert_outer_idx,
+      //   wasm.call, ...array_set_i32.uleb128,
+      //   wasm.local$get, ...revert_outer_idx,
+      //   wasm.local$get, ...loc_num,
+      //   wasm.call, ...array_set_i32.uleb128,
+      //   wasm.drop,
+      // wasm.end
     ];
   }
 );
@@ -7541,6 +7605,8 @@ const emit_func_call = funcs.build(
         wasm.call, ...append_varuint32.uleb128,
         wasm.i32$const, ...sleb128i32(wasm.call_indirect),
         wasm.call, ...append_code.uleb128,
+        // this is for invoke, which expects one list of args (i32)
+        // and returns i32
         wasm.local$get, ...cnt,
         wasm.i32$const, 0,
         wasm.i32$const, 0,
@@ -7578,36 +7644,37 @@ const emit_func_call = funcs.build(
       wasm.if, wasm.void,
         wasm.local$get, ...func,
         wasm.local$get, ...env,
+// todo: get rid of stage_val_to_free
         wasm.call, ...stage_val_to_free.uleb128,
       wasm.end,
-      wasm.local$get, ...revert_inner,
-      wasm.i32$const, 0,
-      wasm.call, ...array_get_i32.uleb128,
-      wasm.local$set, ...revert_inner_idx,
-      wasm.loop, wasm.void,
-        wasm.local$get, ...revert_inner_idx,
-        wasm.if, wasm.void,
-          wasm.local$get, ...func,
-          wasm.i32$const, ...sleb128i32(wasm.local$get),
-          wasm.call, ...append_code.uleb128,
-          wasm.local$get, ...revert_inner,
-          wasm.local$get, ...revert_inner_idx,
-          wasm.call, ...array_get_i32.uleb128,
-          wasm.call, ...append_varuint32.uleb128,
-          wasm.i32$const, ...sleb128i32(wasm.call),
-          wasm.call, ...append_code.uleb128,
-          wasm.i32$const, ...revert_local_refs.sleb128,
-          wasm.call, ...append_varuint32.uleb128,
-          wasm.drop,
-          wasm.local$get, ...revert_inner_idx,
-          wasm.i32$const, 1,
-          wasm.i32$sub,
-          wasm.local$set, ...revert_inner_idx,
-          wasm.br, 1,
-        wasm.end,
-      wasm.end,
-      wasm.local$get, ...revert_inner,
-      wasm.call, ...free.uleb128,
+      // wasm.local$get, ...revert_inner,
+      // wasm.i32$const, 0,
+      // wasm.call, ...array_get_i32.uleb128,
+      // wasm.local$set, ...revert_inner_idx,
+      // wasm.loop, wasm.void,
+      //   wasm.local$get, ...revert_inner_idx,
+      //   wasm.if, wasm.void,
+      //     wasm.local$get, ...func,
+      //     wasm.i32$const, ...sleb128i32(wasm.local$get),
+      //     wasm.call, ...append_code.uleb128,
+      //     wasm.local$get, ...revert_inner,
+      //     wasm.local$get, ...revert_inner_idx,
+      //     wasm.call, ...array_get_i32.uleb128,
+      //     wasm.call, ...append_varuint32.uleb128,
+      //     wasm.i32$const, ...sleb128i32(wasm.call),
+      //     wasm.call, ...append_code.uleb128,
+      //     wasm.i32$const, ...revert_local_refs.sleb128,
+      //     wasm.call, ...append_varuint32.uleb128,
+      //     wasm.drop,
+      //     wasm.local$get, ...revert_inner_idx,
+      //     wasm.i32$const, 1,
+      //     wasm.i32$sub,
+      //     wasm.local$set, ...revert_inner_idx,
+      //     wasm.br, 1,
+      //   wasm.end,
+      // wasm.end,
+      // wasm.local$get, ...revert_inner,
+      // wasm.call, ...free.uleb128,
     ];
   }
 );
@@ -7690,7 +7757,10 @@ const free_locals = funcs.build(
           cnt = this.local(wasm.i32);
     return [
       wasm.local$get, ...env,
-      wasm.call, ...get_locals_to_free.uleb128,
+      wasm.i32$const, ...sleb128i32(make_keyword("locals-to-free")),
+      wasm.i32$const, nil,
+      wasm.call, ...get.uleb128,
+      wasm.call, ...atom_deref.uleb128,
       wasm.local$tee, ...locals,
       wasm.call, ...types.Array.fields.length.uleb128,
       wasm.local$set, ...cnt,
@@ -7721,7 +7791,7 @@ const free_locals = funcs.build(
           wasm.call, ...append_varuint32.uleb128,
           wasm.i32$const, ...sleb128i32(wasm.call),
           wasm.call, ...append_code.uleb128,
-          wasm.i32$const, ...sleb128i32(free.func_idx),
+          wasm.i32$const, ...free.sleb128,
           wasm.call, ...append_varuint32.uleb128,
           wasm.i32$const, ...sleb128i32(wasm.end),
           wasm.call, ...append_code.uleb128,
@@ -7731,7 +7801,7 @@ const free_locals = funcs.build(
           wasm.call, ...append_varuint32.uleb128,
           wasm.i32$const, ...sleb128i32(wasm.call),
           wasm.call, ...append_code.uleb128,
-          wasm.i32$const, ...sleb128i32(free.func_idx),
+          wasm.i32$const, ...free.sleb128,
           wasm.call, ...append_varuint32.uleb128,
           wasm.drop,
           wasm.local$get, ...idx,
@@ -7825,12 +7895,12 @@ const comp_func = funcs.build(
       wasm.local$get, ...func_idx,
       wasm.local$get, ...inner_env,
       wasm.call, ...emit_code.uleb128,
-      wasm.i32$const, ...sleb128i32(wasm.call),
-      wasm.call, ...append_code.uleb128,
-      wasm.i32$const, ...inc_refs.sleb128,
-      wasm.call, ...append_varuint32.uleb128,
-      wasm.local$get, ...inner_env,
-      wasm.call, ...free_locals.uleb128,
+      // wasm.i32$const, ...sleb128i32(wasm.call),
+      // wasm.call, ...append_code.uleb128,
+      // wasm.i32$const, ...inc_refs.sleb128,
+      // wasm.call, ...append_varuint32.uleb128,
+      // wasm.local$get, ...inner_env,
+      // wasm.call, ...free_locals.uleb128,
       wasm.call, ...end_func.uleb128,
       wasm.drop,
       wasm.local$get, ...func,
@@ -7862,9 +7932,9 @@ const comp_func = funcs.build(
         wasm.call, ...append_varsint32.uleb128,
         wasm.drop,
       wasm.end,
-      wasm.local$get, ...func,
-      wasm.local$get, ...env,
-      wasm.call, ...stage_val_to_free.uleb128,
+      // wasm.local$get, ...func,
+      // wasm.local$get, ...env,
+      // wasm.call, ...stage_val_to_free.uleb128,
     ];
   }
 );
@@ -7916,7 +7986,11 @@ def_special_form("loop", function (func, forms, env) {
     wasm.i32$const, ...sleb128i32(wasm.end),
     wasm.call, ...append_code.uleb128,
     wasm.local$get, ...env,
-    wasm.call, ...free.uleb128
+// todo: get rid of stage_val_to_free
+    wasm.call, ...stage_val_to_free.uleb128,
+    wasm.local$get, ...env,
+    wasm.call, ...free.uleb128,
+    wasm.local$get, ...func
   ];
 });
 
@@ -7963,11 +8037,13 @@ def_special_form("if", function (func, forms, env) {
       wasm.local$get, ...func,
       wasm.i32$const, ...sleb128i32(wasm.call),
       wasm.call, ...append_code.uleb128,
+// todo: what about i64/f64 conditionals that return i32?
       wasm.i32$const, ...to_bool_i32.sleb128,
       wasm.call, ...append_varuint32.uleb128,
     wasm.end,
     wasm.i32$const, ...sleb128i32(wasm.if),
     wasm.call, ...append_code.uleb128,
+// todo: allow i64/f64 return
     wasm.i32$const, ...sleb128i32(wasm.i32),
     wasm.call, ...append_code.uleb128,
     wasm.drop,
@@ -7990,7 +8066,11 @@ def_special_form("if", function (func, forms, env) {
     wasm.i32$const, ...sleb128i32(wasm.end),
     wasm.call, ...append_code.uleb128,
     wasm.local$get, ...env,
-    wasm.call, ...free.uleb128
+// todo: get rid of stage_val_to_free
+    wasm.call, ...stage_val_to_free.uleb128,
+    wasm.local$get, ...env,
+    wasm.call, ...free.uleb128,
+    wasm.local$get, ...func
   ];
 });
 
@@ -8192,7 +8272,11 @@ def_special_form("do", function (func, forms, env) {
     wasm.i32$const, ...sleb128i32(wasm.end),
     wasm.call, ...append_code.uleb128,
     wasm.local$get, ...env,
-    wasm.call, ...free.uleb128
+// todo: get rid of stage_val_to_free
+    wasm.call, ...stage_val_to_free.uleb128,
+    wasm.local$get, ...env,
+    wasm.call, ...free.uleb128,
+    wasm.local$get, ...func
   ];
 });
 
@@ -8574,9 +8658,10 @@ emit_code.implement(types.Vector, function (vec, func, env) {
 |             |
 \*-----------*/
 
-const expand_form = new_method("expand-form", 1, wasm.i32, {}, function (form) {
-  return [wasm.local$get, ...form];
-});
+const expand_form = new_method("expand-form", 1, wasm.i32,
+  { comp: "expand-form" },
+  form => [wasm.local$get, ...form]
+);
 
 /*------------*\
 |              |
@@ -8730,9 +8815,6 @@ const compile_form = funcs.build(
 // todo: why does this make no difference?
       //wasm.local$get, ...form,
       //wasm.call, ...free.uleb128,
-// todo: emit_code should determine if double compilation needed
-// (i.e. if form emited that needs to be compiled)
-      wasm.call, ...compile.uleb128,
       wasm.call, ...compile.uleb128,
       wasm.local$get, ...out,
       wasm.i32$load, 2, 0,
@@ -9987,7 +10069,7 @@ cached_strings = {};
 
 // END COMP
 
-// !!! package cut
+begin_package();
 
 console.timeEnd("all");
 console.time("core");
@@ -10026,6 +10108,15 @@ console.time("core");
 
 // start_thread();
 
+end_package();
+
+while (funcs.comp.length) {
+  let [nm, ...rest] = funcs.comp.pop();
+  comp.store_comp_func(make_symbol(nm), ...rest);
+}
+
+begin_package();
+
 function eval_file (f, interpret) {
   const fd = fs.openSync(f, "r"),
         file = comp.File(fd),
@@ -10037,10 +10128,9 @@ function eval_file (f, interpret) {
       a_idx = 0,
       buf_len = 0;
   while (idx < len) {
-	  //console.log(comp.Function$func_num(expand_form.main_func));
     [form, idx, lineno] = comp.eval_stream(file, interpret, idx, lineno);
     // no need to store nil
-    if (form) {
+    if (!interpret && form) {
       parsed_forms.resize(buf_len += 4);
       a32[a_idx++] = form;
     }
@@ -10054,16 +10144,9 @@ function eval_file (f, interpret) {
 // before compiling again with start_func
 if (!module_len || had_start_section) compile();
 
-if (typeof funcs !== "undefined") {
-  while (funcs.comp.length) {
-    let [nm, ...rest] = funcs.comp.pop();
-    comp.store_comp_func(make_symbol(nm), ...rest);
-  }
-}
-
-// if file was compiled or parsed, we need to initialize
-// memory and (if parsed) call start_func
 try {
+  // if file was compiled or parsed, we need to initialize
+  // memory and (if parsed) call start_func
   if (module_len) compile(precompiled);
 
   if (parsed_forms.byteLength) {
@@ -10084,6 +10167,7 @@ try {
       eval_file(argv.interpret[0], 1);
     }
   }
+
 } catch (e) {
   if (e instanceof WebAssembly.Exception && e.is(exception_tag)) {
     const exc = e.getArg(exception_tag, 0);
@@ -10095,5 +10179,6 @@ try {
 
 console.timeEnd("core");
 
-}
+end_package();
 
+}
