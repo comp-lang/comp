@@ -25,7 +25,7 @@
                   args (rest args)
                   coll (first args)]
               (cons
-                (invoke f (first coll))
+                (call (Method$main_func invoke) f (first coll))
                 (call map f (rest coll))))))
         coll))))
 
@@ -53,7 +53,7 @@
 
 (def 'pr
   (fn _ [x]
-    (js/console.log (pr-str x))))
+    (js/console.log (call (Method$main_func pr-str) x))))
 
 ;; todo: escape double quotes
 (impl pr-str String
@@ -92,16 +92,16 @@
 (impl str Vector
   (fn _ [vec]
     (let [n (Int$value (Vector$count vec))
-          i #0 
+          i (Int$value 0)
           s (atom "[")]
       (loop
-        (let [el (pr-str (nth vec (Int$new i) nil))
-              new-s (concat-str (deref s) el)]
-          (if (i64/eq i (i64/sub n #1))
+        (let [el (call (Method$main_func pr-str) (nth vec (Int$new i) nil))
+              new-s (concat-str (call (Method$main_func deref) s) el)]
+          (if (i64/eq i (i64/sub n (Int$value 1)))
             (concat-str new-s "]")
             (do
-              (reset! s (concat-str new-s " "))
-              (set-local i (i64/add i #1))
+              (call (Method$main_func reset!) s (concat-str new-s " "))
+              (set-local i (i64/add i (Int$value 1)))
               (recur))))))))
 
 (impl str HashMap
@@ -127,7 +127,7 @@
     (let [seq (atom seq)
           s (atom "(")]
       (loop
-        (let [val (str (first (deref seq)))
+        (let [val (call (Method$main_func pr-str) (first (deref seq)))
               new-s (concat-str (deref s) val)
               seq (reset! seq (rest (deref seq)))]
           (if (Int$value (count seq))
@@ -138,7 +138,7 @@
 
 (def 'inc
   (fn _ [x]
-    (Int$new (i64/add (Int$value x) #1))))
+    (Int$new (i64/add (Int$value x) (Int$value 1)))))
 
 (pr (string-length "abc"))
 (pr (substring "abcd" 1 3))
@@ -146,6 +146,10 @@
 (pr (hash "abc"))
 (pr (eq 1 2))
 (pr (Symbol$instance 'a))
+(pr :a)
+(pr (concat-str "a" "b"))
+(pr [1 2 3])
+(pr '(1 2 3))
 (pr (map inc [1 2 3]))
 
 (def 'defmacro
