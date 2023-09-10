@@ -6,11 +6,11 @@
       (VariadicFunction$func f)
       (concat (VariadicFunction$args f) args))))
 
-(impl invoke Function (fn _ [f arg] (call f arg)))
+(impl invoke Function (fn _ [f arg] (f arg)))
 
 (impl invoke Method
   (fn _ [m arg]
-    (call (Method$main_func m) arg)))
+    (call-mtd m arg)))
 
 (def 'map
   (fn map [f coll]
@@ -25,8 +25,8 @@
                   args (rest args)
                   coll (first args)]
               (cons
-                (call (Method$main_func invoke) f (first coll))
-                (call map f (rest coll))))))
+                (call-mtd invoke f (first coll))
+                (map f (rest coll))))))
         coll))))
 
 (def 'aliases (atom {}))
@@ -35,25 +35,37 @@
 
 (impl expand-form Seq
   (fn _ [form]
-    (let [head (expand-form (first form))
+    (let [head (call-mtd expand-form (first form))
           tail (rest form)
           special
             (if (Symbol$instance head)
-              (let [macro (get (deref macros) head nil)]
+              (let [macro (get (call-mtd deref macros) head nil)]
                 (if macro
-                  (expand-form (invoke macro tail))
+                  (macro tail)
                   nil))
               nil)]
       (if special special
         (cons head (map expand-form tail))))))
 
+(def 'defmacro
+  (fn _ [nm fn]
+    (do (call-mtd reset! macros (assoc (call-mtd deref macros) nm fn))
+        fn)))
+
+;; todo: syntax quoting doesn't work?
+(defmacro 'or
+  (fn _ [args]
+    (cons 'if
+      (cons (first args)
+        (cons (first args)
+          (cons (first (rest args))
+            ()))))))
+
+(compile)
+
 (defmethod 'str 1 nil)
 
 (defmethod 'pr-str 1 str)
-
-(def 'pr
-  (fn _ [x]
-    (js/console.log (call (Method$main_func pr-str) x))))
 
 ;; todo: escape double quotes
 (impl pr-str String
@@ -95,12 +107,12 @@
           i (Int$value 0)
           s (atom "[")]
       (loop
-        (let [el (call (Method$main_func pr-str) (nth vec (Int$new i) nil))
-              new-s (concat-str (call (Method$main_func deref) s) el)]
+        (let [el (call-mtd pr-str (nth vec (Int$new i) nil))
+              new-s (concat-str (call-mtd deref s) el)]
           (if (i64/eq i (i64/sub n (Int$value 1)))
             (concat-str new-s "]")
             (do
-              (call (Method$main_func reset!) s (concat-str new-s " "))
+              (call-mtd reset! s (concat-str new-s " "))
               (set-local i (i64/add i (Int$value 1)))
               (recur))))))))
 
@@ -109,16 +121,16 @@
     (let [m (atom (to-seq m))
           s (atom "{")]
       (loop
-        (let [kv (first (deref m))
+        (let [kv (first (call-mtd deref m))
               k (pr-str (LeafNode$key kv))
               v (pr-str (LeafNode$val kv))
-              new-s (concat-str (deref s)
+              new-s (concat-str (call-mtd deref s)
                       (concat-str k
                         (concat-str " " v)))
-              m (reset! m (rest (deref m)))]
+              m (call-mtd reset! m (rest (call-mtd deref m)))]
           (if (Int$value (count m))
             (do
-              (reset! s (concat-str new-s " "))
+              (call-mtd reset! s (concat-str new-s " "))
               (recur))
             (concat-str new-s "}")))))))
 
@@ -127,14 +139,18 @@
     (let [seq (atom seq)
           s (atom "(")]
       (loop
-        (let [val (call (Method$main_func pr-str) (first (deref seq)))
-              new-s (concat-str (deref s) val)
-              seq (reset! seq (rest (deref seq)))]
+        (let [val (call-mtd pr-str (first (call-mtd deref seq)))
+              new-s (concat-str (call-mtd deref s) val)
+              seq (call-mtd reset! seq (rest (call-mtd deref seq)))]
           (if (Int$value (count seq))
             (do
-              (reset! s (concat-str new-s " "))
+              (call-mtd reset! s (concat-str new-s " "))
               (recur))
             (concat-str new-s ")")))))))
+
+(def 'pr
+  (fn _ [x]
+    (js/console.log (call-mtd pr-str x))))
 
 (def 'inc
   (fn _ [x]
@@ -145,22 +161,18 @@
 (pr (index-of-codepoint "abcd" 99))
 (pr (hash "abc"))
 (pr (eq 1 2))
-(pr (Symbol$instance 'a))
+(pr (Method$instance deref))
 (pr :a)
 (pr (concat-str "a" "b"))
 (pr [1 2 3])
 (pr '(1 2 3))
 (pr (map inc [1 2 3]))
-
-(def 'defmacro
-  (fn _ [nm fn]
-    (do (reset! macros (assoc (deref macros) nm fn))
-        fn)))
+(or false (pr 18))
 
 (impl expand-form Symbol
   (fn _ [s]
-    (let [s* (get (deref aliases) s nil)]
+    (let [s* (get (call-mtd deref aliases) s nil)]
       (if s*
         s*
         (throw s
-          (concat-str "symbol not found: " (str s)))))))
+          (concat-str "symbol not found: " (call-mtd str s)))))))

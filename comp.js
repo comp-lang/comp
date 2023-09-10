@@ -37,23 +37,23 @@
   } else {
     const argv = {
             compile: null,
-            interpret: null,
-            parse: null,
+            files: [],
             init_pages: 1,
             max_pages: 65536
           },
           workers = require('node:worker_threads');
-    let last_key;
-    for (let i = 2; i < process.argv.length; i++) {
+    for (let i = 2, last_key; i < process.argv.length; i++) {
       const arg = process.argv[i];
       if (arg.startsWith("--")) {
         last_key = arg.replace("--", "");
-        if (argv[last_key] === null) argv[last_key] = [];
       } else {
+        if (!last_key) last_key = "files";
         if (argv[last_key] instanceof Array) {
           argv[last_key].push(arg);
         } else if (argv[last_key] instanceof Number) {
           argv[last_key] = parseInt(arg);
+        } else {
+          argv[last_key] = arg;
         }
       }
     }
@@ -6684,6 +6684,7 @@ to_js.implement(types.String, function (str) {
 |             |
 \*-----------*/
 
+// todo: should these really be methods?
 const deref = new_method("deref", 1, wasm.i32, { comp: "deref" });
 
 deref.implement(types.Atom, atom_deref.func_idx);
@@ -7725,8 +7726,9 @@ const stage_val_to_free = funcs.build(
 );
 
 const emit_func_call = funcs.build(
-  [wasm.i32, wasm.i32, wasm.i32, wasm.i32], [], {},
-  function (func, env, head, args) {
+  [wasm.i32, wasm.i32, wasm.i32, wasm.i32, wasm.i32],
+  [], {},
+  function (func, env, head, args, is_mtd) {
     const cnt = this.local(wasm.i32),
           func_record = this.local(wasm.i32),
           result = this.local(wasm.i32),
@@ -7798,10 +7800,18 @@ const emit_func_call = funcs.build(
         wasm.local$get, ...func,
         wasm.local$get, ...env,
         wasm.call, ...emit_code.uleb128,
+        wasm.local$get, ...is_mtd,
+        wasm.if, wasm.void,
+          wasm.local$get, ...func,
+          wasm.i32$const, ...sleb128i32(wasm.call),
+          wasm.call, ...append_code.uleb128,
+          wasm.i32$const, ...sleb128i32(types.Method.fields.main_func.func_idx),
+          wasm.call, ...append_varuint32.uleb128,
+          wasm.drop,
+        wasm.end,
         wasm.i32$const, ...sleb128i32(wasm.call),
         wasm.call, ...append_code.uleb128,
-// todo: change to sleb
-        wasm.i32$const, ...types.Function.fields.tbl_idx.uleb128,
+        wasm.i32$const, ...sleb128i32(types.Function.fields.tbl_idx.func_idx),
         wasm.call, ...append_varuint32.uleb128,
         wasm.i32$const, ...sleb128i32(wasm.call_indirect),
         wasm.call, ...append_code.uleb128,
@@ -7828,8 +7838,7 @@ const emit_func_call = funcs.build(
   }
 );
 
-// todo: call is for fn, call-method for methods
-def_special_form("call", function (fn, args, env) {
+def_special_form("call-mtd", function (fn, args, env) {
   return [
     wasm.local$get, ...fn,
     wasm.local$get, ...env,
@@ -7837,6 +7846,7 @@ def_special_form("call", function (fn, args, env) {
     wasm.call, ...first.uleb128,
     wasm.local$get, ...args,
     wasm.call, ...rest.uleb128,
+    wasm.i32$const, 1,
     wasm.call, ...emit_func_call.uleb128,
     wasm.local$get, ...fn,
   ];
@@ -8620,6 +8630,7 @@ emit_code.implement(types.Seq, function (list, func, env) {
             wasm.local$get, ...env,
             wasm.local$get, ...list_head,
             wasm.local$get, ...args_list,
+            wasm.i32$const, 0,
             wasm.call, ...emit_func_call.uleb128,
           wasm.end,
         wasm.end,
@@ -8833,47 +8844,62 @@ const compile_form = funcs.build(
           env = this.local(wasm.i32);
     return [
       wasm.local$get, ...form,
-      wasm.call, ...expand_form.uleb128,
-      wasm.call, ...start_func.uleb128,
-      wasm.i32$const, ...sleb128i32(wasm.i32$const),
-      wasm.call, ...append_code.uleb128,
-      wasm.i32$const, 4,
-      wasm.call, ...alloc.uleb128,
-      wasm.local$tee, ...out,
-      wasm.call, ...append_varsint32.uleb128,
-      wasm.i32$const, nil,
-      wasm.call, ...new_env.uleb128,
-      wasm.local$tee, ...env,
-      wasm.call, ...emit_code.uleb128,
-      wasm.i32$const, ...sleb128i32(wasm.i32$store),
-      wasm.call, ...append_code.uleb128,
-      wasm.i32$const, 2,
-      wasm.call, ...append_varuint32.uleb128,
-      wasm.i32$const, 0,
-      wasm.call, ...append_varuint32.uleb128,
-      wasm.call, ...end_func.uleb128,
-      wasm.local$get, ...env,
-      wasm.call, ...replace_global_references.uleb128,
-      // finish funcs-to-modify & add to start func before adding compiled form:
-      wasm.local$get, ...env,
-      wasm.i32$const, ...sleb128i32(make_keyword("funcs-to-modify")),
-      wasm.i32$const, nil,
-      wasm.call, ...get.uleb128,
-      wasm.call, ...types.Int.fields.value.uleb128,
-      wasm.i32$wrap_i64,
-      wasm.call, ...end_func.uleb128,
-      wasm.call, ...add_to_start_func.uleb128,
-      wasm.call, ...add_to_start_func.uleb128,
-      wasm.local$get, ...env,
-      wasm.call, ...free.uleb128,
+      wasm.call, ...types.Seq.pred.uleb128,
+      wasm.if, wasm.i32,
+        wasm.local$get, ...form,
+        wasm.call, ...first.uleb128,
+        wasm.i32$const, ...sleb128i32(make_symbol("compile")),
+        wasm.i32$eq,
+      wasm.else,
+        wasm.i32$const, 0,
+      wasm.end,
+      wasm.if, wasm.i32,
+        wasm.call, ...compile.uleb128,
+        wasm.i32$const, 0,
+      wasm.else,
+        wasm.local$get, ...form,
+        wasm.call, ...expand_form.uleb128,
+        wasm.call, ...start_func.uleb128,
+        wasm.i32$const, ...sleb128i32(wasm.i32$const),
+        wasm.call, ...append_code.uleb128,
+        wasm.i32$const, 4,
+        wasm.call, ...alloc.uleb128,
+        wasm.local$tee, ...out,
+        wasm.call, ...append_varsint32.uleb128,
+        wasm.i32$const, nil,
+        wasm.call, ...new_env.uleb128,
+        wasm.local$tee, ...env,
+        wasm.call, ...emit_code.uleb128,
+        wasm.i32$const, ...sleb128i32(wasm.i32$store),
+        wasm.call, ...append_code.uleb128,
+        wasm.i32$const, 2,
+        wasm.call, ...append_varuint32.uleb128,
+        wasm.i32$const, 0,
+        wasm.call, ...append_varuint32.uleb128,
+        wasm.call, ...end_func.uleb128,
+        wasm.local$get, ...env,
+        wasm.call, ...replace_global_references.uleb128,
+        // finish funcs-to-modify & add to start func before adding compiled form:
+        wasm.local$get, ...env,
+        wasm.i32$const, ...sleb128i32(make_keyword("funcs-to-modify")),
+        wasm.i32$const, nil,
+        wasm.call, ...get.uleb128,
+        wasm.call, ...types.Int.fields.value.uleb128,
+        wasm.i32$wrap_i64,
+        wasm.call, ...end_func.uleb128,
+        wasm.call, ...add_to_start_func.uleb128,
+        wasm.call, ...add_to_start_func.uleb128,
+        wasm.local$get, ...env,
+        wasm.call, ...free.uleb128,
 // todo: why does this make no difference?
-      //wasm.local$get, ...form,
-      //wasm.call, ...free.uleb128,
-      wasm.local$get, ...out,
-      wasm.i32$load, 2, 0,
-      wasm.local$get, ...out,
-      wasm.i32$const, 4,
-      wasm.call, ...free_mem.uleb128,
+        //wasm.local$get, ...form,
+        //wasm.call, ...free.uleb128,
+        wasm.local$get, ...out,
+        wasm.i32$load, 2, 0,
+        wasm.local$get, ...out,
+        wasm.i32$const, 4,
+        wasm.call, ...free_mem.uleb128,
+      wasm.end
     ];
   }
 );
@@ -10176,9 +10202,7 @@ function eval_file (f, interpret) {
   while (idx < len) {
     [form, idx, lineno] = comp.eval_stream(file, idx, lineno);
   }
-  console.time("compile");
   if (interpret) compile();
-  console.timeEnd("compile");
   comp.free(file);
 }
 
@@ -10187,9 +10211,6 @@ function eval_file (f, interpret) {
 // then we need to call compile() here to initialize comp
 // before compiling again with start_func
 compile(precompiled);
-
-console.timeEnd("all");
-console.time("core");
 
 try {
   // if file was compiled or parsed, we need to initialize
@@ -10200,17 +10221,9 @@ try {
   }
 
   if (!main_env.is_browser) {
-    if (argv.compile) {
-      if (argv.compile[0]) eval_file(argv.compile[0], 1);
-      fs.writeFile("blah.js", build_package(), () => null);
-    } else if (argv.parse) {
-      eval_file(argv.parse[0], 0);
-      fs.writeFile("blah.js", build_package(), () => null);
-    } else if (argv.interpret) {
-      eval_file(argv.interpret[0], 1);
-    }
+    for (const file of argv.files) eval_file(file, !argv.compile);
+    if (argv.compile) fs.writeFile(argv.compile, build_package(), () => null);
   }
-
 } catch (e) {
   if (e instanceof WebAssembly.Exception && e.is(exception_tag)) {
     const exc = e.getArg(exception_tag, 0);
@@ -10220,7 +10233,7 @@ try {
   throw(e);
 }
 
-console.timeEnd("core");
+console.timeEnd("all");
 
 end_package();
 
