@@ -47,12 +47,13 @@
       (if special special
         (cons head (map expand-form tail))))))
 
+(compile)
+
 (def 'defmacro
   (fn _ [nm fn]
     (do (call-mtd reset! macros (assoc (call-mtd deref macros) nm fn))
         fn)))
 
-;; todo: syntax quoting doesn't work?
 (defmacro 'or
   (fn _ [args]
     (cons 'if

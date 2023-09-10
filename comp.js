@@ -769,6 +769,11 @@ function reserve_func_num (spec) {
     spec.func_idx = import_num;
   } else {
     spec.func_idx = func_num;
+    // next two statements create placeholders which allows (compile) to be nested
+    module_sections[func_section][func_num - import_num] = _get_type_idx({
+      params: [], result: []
+    });
+    module_sections[code_section][func_num - import_num] = [2, 0, 0xb];
     func_num++;
   }
   spec.uleb128 = uleb128i32(spec.func_idx);
@@ -7852,6 +7857,17 @@ def_special_form("call-mtd", function (fn, args, env) {
   ];
 });
 
+def_special_form("compile", function (fn, args, env) {
+  return [
+    wasm.call, ...compile.uleb128,
+    wasm.local$get, ...fn,
+    wasm.i32$const, ...sleb128i32(wasm.i32$const),
+    wasm.call, ...append_code.uleb128,
+    wasm.i32$const, 0,
+    wasm.call, ...append_varsint32.uleb128
+  ];
+});
+
 def_special_form("let", function (func, forms, env) {
   const bdgs = this.local(wasm.i32),
         bdgs_cnt = this.local(wasm.i32),
@@ -8844,62 +8860,47 @@ const compile_form = funcs.build(
           env = this.local(wasm.i32);
     return [
       wasm.local$get, ...form,
-      wasm.call, ...types.Seq.pred.uleb128,
-      wasm.if, wasm.i32,
-        wasm.local$get, ...form,
-        wasm.call, ...first.uleb128,
-        wasm.i32$const, ...sleb128i32(make_symbol("compile")),
-        wasm.i32$eq,
-      wasm.else,
-        wasm.i32$const, 0,
-      wasm.end,
-      wasm.if, wasm.i32,
-        wasm.call, ...compile.uleb128,
-        wasm.i32$const, 0,
-      wasm.else,
-        wasm.local$get, ...form,
-        wasm.call, ...expand_form.uleb128,
-        wasm.call, ...start_func.uleb128,
-        wasm.i32$const, ...sleb128i32(wasm.i32$const),
-        wasm.call, ...append_code.uleb128,
-        wasm.i32$const, 4,
-        wasm.call, ...alloc.uleb128,
-        wasm.local$tee, ...out,
-        wasm.call, ...append_varsint32.uleb128,
-        wasm.i32$const, nil,
-        wasm.call, ...new_env.uleb128,
-        wasm.local$tee, ...env,
-        wasm.call, ...emit_code.uleb128,
-        wasm.i32$const, ...sleb128i32(wasm.i32$store),
-        wasm.call, ...append_code.uleb128,
-        wasm.i32$const, 2,
-        wasm.call, ...append_varuint32.uleb128,
-        wasm.i32$const, 0,
-        wasm.call, ...append_varuint32.uleb128,
-        wasm.call, ...end_func.uleb128,
-        wasm.local$get, ...env,
-        wasm.call, ...replace_global_references.uleb128,
-        // finish funcs-to-modify & add to start func before adding compiled form:
-        wasm.local$get, ...env,
-        wasm.i32$const, ...sleb128i32(make_keyword("funcs-to-modify")),
-        wasm.i32$const, nil,
-        wasm.call, ...get.uleb128,
-        wasm.call, ...types.Int.fields.value.uleb128,
-        wasm.i32$wrap_i64,
-        wasm.call, ...end_func.uleb128,
-        wasm.call, ...add_to_start_func.uleb128,
-        wasm.call, ...add_to_start_func.uleb128,
-        wasm.local$get, ...env,
-        wasm.call, ...free.uleb128,
+      wasm.call, ...expand_form.uleb128,
+      wasm.call, ...start_func.uleb128,
+      wasm.i32$const, ...sleb128i32(wasm.i32$const),
+      wasm.call, ...append_code.uleb128,
+      wasm.i32$const, 4,
+      wasm.call, ...alloc.uleb128,
+      wasm.local$tee, ...out,
+      wasm.call, ...append_varsint32.uleb128,
+      wasm.i32$const, nil,
+      wasm.call, ...new_env.uleb128,
+      wasm.local$tee, ...env,
+      wasm.call, ...emit_code.uleb128,
+      wasm.i32$const, ...sleb128i32(wasm.i32$store),
+      wasm.call, ...append_code.uleb128,
+      wasm.i32$const, 2,
+      wasm.call, ...append_varuint32.uleb128,
+      wasm.i32$const, 0,
+      wasm.call, ...append_varuint32.uleb128,
+      wasm.call, ...end_func.uleb128,
+      wasm.local$get, ...env,
+      wasm.call, ...replace_global_references.uleb128,
+      // finish funcs-to-modify & add to start func before adding compiled form:
+      wasm.local$get, ...env,
+      wasm.i32$const, ...sleb128i32(make_keyword("funcs-to-modify")),
+      wasm.i32$const, nil,
+      wasm.call, ...get.uleb128,
+      wasm.call, ...types.Int.fields.value.uleb128,
+      wasm.i32$wrap_i64,
+      wasm.call, ...end_func.uleb128,
+      wasm.call, ...add_to_start_func.uleb128,
+      wasm.call, ...add_to_start_func.uleb128,
+      wasm.local$get, ...env,
+      wasm.call, ...free.uleb128,
 // todo: why does this make no difference?
-        //wasm.local$get, ...form,
-        //wasm.call, ...free.uleb128,
-        wasm.local$get, ...out,
-        wasm.i32$load, 2, 0,
-        wasm.local$get, ...out,
-        wasm.i32$const, 4,
-        wasm.call, ...free_mem.uleb128,
-      wasm.end
+      //wasm.local$get, ...form,
+      //wasm.call, ...free.uleb128,
+      wasm.local$get, ...out,
+      wasm.i32$load, 2, 0,
+      wasm.local$get, ...out,
+      wasm.i32$const, 4,
+      wasm.call, ...free_mem.uleb128,
     ];
   }
 );
