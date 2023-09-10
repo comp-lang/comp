@@ -29,30 +29,44 @@
                 (map f (rest coll))))))
         coll))))
 
+(impl syntax-quote Seq
+  (fn f [form]
+    (if (Int$value (count form))
+      (cons 'cons
+        (cons (call-mtd syntax-quote (first form))
+          (cons (f (rest form)) ())))
+      ())))
+
 (def 'aliases (atom {}))
 
 (def 'macros (atom {}))
 
 (impl expand-form Seq
   (fn _ [form]
-    (let [head (call-mtd expand-form (first form))
-          tail (rest form)
-          special
-            (if (Symbol$instance head)
-              (let [macro (get (call-mtd deref macros) head nil)]
-                (if macro
-                  (macro tail)
-                  nil))
-              nil)]
-      (if special special
-        (cons head (map expand-form tail))))))
-
-(compile)
+    (if (Int$value (count form))
+      (let [head (call-mtd expand-form (first form))
+            tail (rest form)
+            special
+              (if (Symbol$instance head)
+                (let [macro (get (call-mtd deref macros) head nil)]
+                  (if macro
+                    (macro tail)
+                    (if (eq head 'defmacro)
+                      (cons 'do (cons form (cons (cons 'compile ()) ())))
+                      nil)))
+                nil)]
+        (if special special
+          (cons head (map expand-form tail))))
+      form)))
 
 (def 'defmacro
   (fn _ [nm fn]
     (do (call-mtd reset! macros (assoc (call-mtd deref macros) nm fn))
         fn)))
+
+;; impl needs double compile
+(compile)
+(compile)
 
 (defmacro 'or
   (fn _ [args]
@@ -62,11 +76,13 @@
           (cons (first (rest args))
             ()))))))
 
-(compile)
-
 (defmethod 'str 1 nil)
 
 (defmethod 'pr-str 1 str)
+
+(def 'pr
+  (fn _ [x]
+    (js/console.log (call-mtd pr-str x))))
 
 ;; todo: escape double quotes
 (impl pr-str String
@@ -137,26 +153,25 @@
 
 (impl str Seq
   (fn _ [seq]
-    (let [seq (atom seq)
-          s (atom "(")]
-      (loop
-        (let [val (call-mtd pr-str (first (call-mtd deref seq)))
-              new-s (concat-str (call-mtd deref s) val)
-              seq (call-mtd reset! seq (rest (call-mtd deref seq)))]
-          (if (Int$value (count seq))
-            (do
-              (call-mtd reset! s (concat-str new-s " "))
-              (recur))
-            (concat-str new-s ")")))))))
-
-(def 'pr
-  (fn _ [x]
-    (js/console.log (call-mtd pr-str x))))
+    (if (Int$value (count seq))
+      (let [seq (atom seq)
+            s (atom "(")]
+        (loop
+          (let [val (call-mtd pr-str (first (call-mtd deref seq)))
+                new-s (concat-str (call-mtd deref s) val)
+                seq (call-mtd reset! seq (rest (call-mtd deref seq)))]
+            (if (Int$value (count seq))
+              (do
+                (call-mtd reset! s (concat-str new-s " "))
+                (recur))
+              (concat-str new-s ")")))))
+      "()")))
 
 (def 'inc
   (fn _ [x]
     (Int$new (i64/add (Int$value x) (Int$value 1)))))
 
+(pr `(1 2 3))
 (pr (string-length "abc"))
 (pr (substring "abcd" 1 3))
 (pr (index-of-codepoint "abcd" 99))
@@ -168,7 +183,8 @@
 (pr [1 2 3])
 (pr '(1 2 3))
 (pr (map inc [1 2 3]))
-(or false (pr 18))
+(pr (or 17 "this should not print"))
+(pr (or nil "this should print"))
 
 (impl expand-form Symbol
   (fn _ [s]

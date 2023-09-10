@@ -6659,7 +6659,7 @@ for (const m of defined_methods) {
   comp.store_method(m.mtd_num, m.def_func.func_idx, m.func_idx);
 }
 
-function new_method (name, num_args, result, opts, def_func) {
+function new_method (num_args, result, opts, def_func) {
   const out = def_mtd(num_args, 0, 0, result,  opts, def_func),
         mtd = comp.store_method(out.mtd_num, out.def_func.func_idx, out.main_func);
   comp.impl_def_func_all_types(mtd);
@@ -6673,7 +6673,7 @@ function new_method (name, num_args, result, opts, def_func) {
 |       |
 \*-----*/
 
-const to_js = new_method("to_js", 1, wasm.i32, { export: "to_js", comp: "to-js" });
+const to_js = new_method(1, wasm.i32, { export: "to_js", comp: "to-js" });
 
 to_js.implement(types.String, function (str) {
   return [
@@ -6690,11 +6690,11 @@ to_js.implement(types.String, function (str) {
 \*-----------*/
 
 // todo: should these really be methods?
-const deref = new_method("deref", 1, wasm.i32, { comp: "deref" });
+const deref = new_method(1, wasm.i32, { comp: "deref" });
 
 deref.implement(types.Atom, atom_deref.func_idx);
 
-const reset = new_method("reset", 2, wasm.i32, { comp: "reset!" });
+const reset = new_method(2, wasm.i32, { comp: "reset!" });
 
 reset.implement(types.Atom, function (atom, val) {
   return [
@@ -7019,7 +7019,7 @@ funcs.build(
 |            |
 \*----------*/
 
-const confirm_off_local_refs = new_method(null, 1, wasm.i32, {}, function (val) {
+const confirm_off_local_refs = new_method(1, wasm.i32, {}, function (val) {
   const prev = this.local(wasm.i32);
   return [
     wasm.local$get, ...val,
@@ -7052,7 +7052,7 @@ const off_local_refs = funcs.build(
   }
 );
 
-const revert_local_refs = new_method(null, 1, 0, {}, function (val) {
+const revert_local_refs = new_method(1, 0, {}, function (val) {
   return [
     wasm.local$get, ...val,
     wasm.i32$const, ...sleb128i32(0x80000000),
@@ -7136,7 +7136,7 @@ const add_global_reference = funcs.build(
   }
 );
 
-const emit_code = new_method("emit_code", 3, wasm.i32, {}, emit_code_default);
+const emit_code = new_method(3, wasm.i32, {}, emit_code_default);
 
 emit_code.implement(types.Symbol, function (sym, func, env) {
   const bdg_val = this.local(wasm.i32);
@@ -7283,6 +7283,13 @@ const new_env = funcs.build(
       wasm.i32$const, ...sleb128i32(make_keyword("globals")),
       wasm.i32$const, 0,
       wasm.call, ...array_by_length.uleb128,
+      wasm.call, ...comp_atom.uleb128,
+      wasm.call, ...assoc.uleb128,
+      wasm.local$get, ...env,
+      wasm.call, ...free.uleb128,
+      wasm.local$tee, ...env,
+      wasm.i32$const, ...sleb128i32(make_keyword("compile")),
+      wasm.i32$const, nil,
       wasm.call, ...comp_atom.uleb128,
       wasm.call, ...assoc.uleb128,
       wasm.local$get, ...env,
@@ -7524,7 +7531,7 @@ const comp_func_set_params = funcs.build(
   }
 );
 
-const is_num64 = new_method(null, 2, wasm.i32, {}, function (val, env) {
+const is_num64 = new_method(2, wasm.i32, {}, function (val, env) {
   return [wasm.i32$const, 0];
 });
 
@@ -7858,8 +7865,19 @@ def_special_form("call-mtd", function (fn, args, env) {
 });
 
 def_special_form("compile", function (fn, args, env) {
+  const compile_flag = this.local(wasm.i32);
   return [
-    wasm.call, ...compile.uleb128,
+    wasm.local$get, ...env,
+    wasm.i32$const, ...sleb128i32(make_keyword("compile")),
+    wasm.i32$const, nil,
+    wasm.call, ...get.uleb128,
+    wasm.local$tee, ...compile_flag,
+    wasm.local$get, ...compile_flag,
+    wasm.call, ...atom_swap_lock.uleb128,
+    wasm.drop,
+    wasm.i32$const, ...sleb128i32(comp_true),
+    wasm.call, ...atom_swap_set.uleb128,
+    wasm.drop,
     wasm.local$get, ...fn,
     wasm.i32$const, ...sleb128i32(wasm.i32$const),
     wasm.call, ...append_code.uleb128,
@@ -8655,7 +8673,7 @@ emit_code.implement(types.Seq, function (list, func, env) {
       wasm.local$get, ...func,
       wasm.i32$const, ...sleb128i32(wasm.i32$const),
       wasm.call, ...append_code.uleb128,
-      wasm.local$get, ...list,
+      wasm.i32$const, ...sleb128i32(empty_seq),
       wasm.call, ...append_varsint32.uleb128,
       wasm.drop,
     wasm.end,
@@ -8750,101 +8768,20 @@ emit_code.implement(types.Vector, function (vec, func, env) {
   ];
 });
 
-/*-----------*\
-|             |
-| expand-form |
-|             |
-\*-----------*/
+/*--------------------------*\
+|                            |
+| expand-form & syntax-quote |
+|                            |
+\*--------------------------*/
 
-const expand_form = new_method("expand-form", 1, wasm.i32,
-  { comp: "expand-form" },
-  form => [wasm.local$get, ...form]
+const expand_form = new_method(1, wasm.i32,
+  { comp: "expand-form" }, form => [wasm.local$get, ...form]
 );
 
-/*------------*\
-|              |
-| syntax-quote |
-|              |
-\*------------*/
-
-const syntax_quote = new_method("syntax-quote", 1, wasm.i32, {}, function (form) {
-  return [wasm.local$get, ...form];
-});
-
-syntax_quote.implement(types.Seq, function (seq) {
-  const idx = this.local(wasm.i32),
-        out = this.local(wasm.i32),
-        tmp = this.local(wasm.i32);
-  return [
-    wasm.local$get, ...seq,
-    wasm.call, ...first.uleb128,
-    wasm.i32$const, ...sleb128i32(make_symbol("unquote")),
-    wasm.i32$eq,
-    wasm.if, wasm.i32,
-      wasm.local$get, ...seq,
-      wasm.call, ...rest.uleb128,
-      wasm.local$tee, ...out,
-      wasm.call, ...first.uleb128,
-      wasm.local$get, ...out,
-      wasm.call, ...free.uleb128,
-    wasm.else,
-      wasm.i32$const, ...sleb128i32(empty_seq),
-      wasm.local$set, ...out,
-      wasm.loop, wasm.void,
-        wasm.local$get, ...seq,
-        wasm.call, ...count.uleb128,
-        wasm.if, wasm.void,
-          wasm.i32$const, ...sleb128i32(empty_seq),
-          wasm.i32$const, ...sleb128i32(make_symbol("seq-append")),
-          wasm.call, ...seq_append.uleb128,
-          wasm.local$tee, ...tmp,
-          wasm.local$get, ...out,
-          wasm.call, ...seq_append.uleb128,
-          wasm.local$get, ...tmp,
-          wasm.call, ...free.uleb128,
-          wasm.local$tee, ...tmp,
-          wasm.local$get, ...seq,
-          wasm.call, ...first.uleb128,
-          wasm.call, ...syntax_quote.uleb128,
-          wasm.call, ...seq_append.uleb128,
-          wasm.local$get, ...tmp,
-          wasm.call, ...free.uleb128,
-          wasm.local$set, ...out,
-          wasm.local$get, ...seq,
-          wasm.call, ...rest.uleb128,
-          wasm.local$get, ...seq,
-          wasm.call, ...free.uleb128,
-          wasm.local$set, ...seq,
-          wasm.br, 1,
-        wasm.end,
-      wasm.end,
-      wasm.local$get, ...out,
-    wasm.end
-  ];
-});
-
-// todo: namespace & gensym
-syntax_quote.implement(types.Symbol, function (sym) {
-  const idx = this.local(wasm.i32),
-        out = this.local(wasm.i32);
-  return [
-    wasm.i32$const, ...sleb128i32(empty_seq),
-    wasm.i32$const, ...sleb128i32(make_symbol("symbol")),
-    wasm.call, ...seq_append.uleb128,
-    wasm.local$tee, ...out,
-    wasm.local$get, ...sym,
-    wasm.call, ...types.Symbol.fields.namespace.uleb128,
-    wasm.call, ...seq_append.uleb128,
-    wasm.local$get, ...out,
-    wasm.call, ...free.uleb128,
-    wasm.local$tee, ...out,
-    wasm.local$get, ...sym,
-    wasm.call, ...types.Symbol.fields.name.uleb128,
-    wasm.call, ...seq_append.uleb128,
-    wasm.local$get, ...out,
-    wasm.call, ...free.uleb128
-  ];
-});
+// todo: can do syntax-quote in expand-form?
+const syntax_quote = new_method(1, wasm.i32,
+  { comp: "syntax-quote" }, form => [wasm.local$get, ...form]
+);
 
 /*------------*\
 |              |
@@ -8891,6 +8828,14 @@ const compile_form = funcs.build(
       wasm.call, ...end_func.uleb128,
       wasm.call, ...add_to_start_func.uleb128,
       wasm.call, ...add_to_start_func.uleb128,
+      wasm.local$get, ...env,
+      wasm.i32$const, ...sleb128i32(make_keyword("compile")),
+      wasm.i32$const, nil,
+      wasm.call, ...get.uleb128,
+      wasm.call, ...atom_deref.uleb128,
+      wasm.if, wasm.void,
+        wasm.call, ...compile.uleb128,
+      wasm.end,
       wasm.local$get, ...env,
       wasm.call, ...free.uleb128,
 // todo: why does this make no difference?
@@ -9304,7 +9249,7 @@ const parse_number = funcs.build(
   }
 );
 
-const literal_tagged_data = new_method(null, 1, wasm.i32, {});
+const literal_tagged_data = new_method(1, wasm.i32, {});
 
 literal_tagged_data.implement(types.Int, function (int) {
   return [
