@@ -19,6 +19,7 @@
 // todo: emit number literal directly
 // todo: when freeing atom, are we also freeing the value every time?
 // todo: when freeing collections, are we also freeing contents?
+// todo: avoid freeing static globals with inc_refs instead of checking count
 // todo: store comp default function in Method so it can be partialed/store local scope
 // todo: change type_num to i16, local_refs to i8, leave i8 empty before refs
 // todo: using append_varsint32 vs append_varuint32 in all the right places?
@@ -769,11 +770,6 @@ function reserve_func_num (spec) {
     spec.func_idx = import_num;
   } else {
     spec.func_idx = func_num;
-    // next two statements create placeholders which allows (compile) to be nested
-    module_sections[func_section][func_num - import_num] = _get_type_idx({
-      params: [], result: []
-    });
-    module_sections[code_section][func_num - import_num] = [2, 0, 0xb];
     func_num++;
   }
   spec.uleb128 = uleb128i32(spec.func_idx);
@@ -872,10 +868,18 @@ const get_type_idx = import_func(
   }
 );
 
+// todo: get rid of this and comp function
 const print_i32 = import_func(
   1, 0, 0, [],
   function (i32) {
     console.log(i32);
+  }
+);
+
+const print_i64 = import_func(
+  0, 1, 0, [],
+  function (i64) {
+    console.log(i64);
   }
 );
 
@@ -3235,6 +3239,8 @@ funcs.build(
       wasm.local$tee, ...idx32,
       wasm.local$get, ...arr,
       wasm.call, ...types.Array.fields.length.uleb128,
+      wasm.i32$const, 4,
+      wasm.i32$mul,
       wasm.i32$lt_u,
       wasm.if, wasm.i64,
         wasm.local$get, ...arr,
@@ -3805,7 +3811,11 @@ substring.implement(types.String, function (str, start, len) {
 substring.implement(types.File, file_get_string_chunk.func_idx);
 
 const substring_to_end = funcs.build(
-  [wasm.i32, wasm.i32], [wasm.i32], {},
+  [wasm.i32, wasm.i32], [wasm.i32],
+  {
+    comp: "substring-to-end",
+    comp_wrapper: [wrap_args_int_to_i32([1])],
+  },
   function (str, idx) {
     return [
       wasm.local$get, ...str,
@@ -3821,7 +3831,11 @@ const substring_to_end = funcs.build(
 
 // todo: test that end < start
 const substring_until = funcs.build(
-  [wasm.i32, wasm.i32, wasm.i32], [wasm.i32], {},
+  [wasm.i32, wasm.i32, wasm.i32], [wasm.i32],
+  {
+    comp: "substring-until",
+    comp_wrapper: [wrap_args_int_to_i32([1, 2])]
+  },
   function (str, start, end) {
     return [
       wasm.local$get, ...str,
@@ -4110,7 +4124,8 @@ const get = pre_new_method(3, 0, 0, wasm.i32, { comp: "get" }),
         comp: "count",
         comp_wrapper: [wrap_result_i32_to_int]
       }),
-      to_seq = pre_new_method(1, 0, 0, wasm.i32, { comp: "to-seq" });
+      to_seq = pre_new_method(1, 0, 0, wasm.i32, { comp: "to-seq" }),
+      to_vec = pre_new_method(1, 0, 0, wasm.i32, { comp: "to-vec" });
 
 /*------*\
 |        |
@@ -4551,6 +4566,8 @@ count.implement(types.Vector, function (vec) {
   ];
 });
 
+to_vec.implement(types.Vector, vec => [wasm.local$get, ...vec]);
+
 const vector_from_array = funcs.build(
   [wasm.i32], [wasm.i32], {},
   function (arr) {
@@ -4908,8 +4925,14 @@ const string_matches = funcs.build(
   }
 );
 
-const string_matches_from = funcs.build(
-  [wasm.i32, wasm.i32, wasm.i32], [wasm.i32], {},
+const string_matches_at = funcs.build(
+  [wasm.i32, wasm.i32, wasm.i32], [wasm.i32], {
+    comp: "string-matches-at",
+    comp_wrapper: [
+      wrap_args_int_to_i32([2]),
+      wrap_result_i32_to_bool
+    ]
+  },
   function (str, sbstr, from) {
     const len = this.local(wasm.i32);
     return [
@@ -5702,6 +5725,14 @@ count.implement(types.HashMap, function (map) {
   ];
 });
 
+to_vec.implement(types.HashMap, function (map) {
+  return [
+    wasm.local$get, ...map,
+    wasm.call, ...to_seq.uleb128,
+    wasm.call, ...to_vec.uleb128
+  ];
+});
+
 /*---*\
 |     |
 | Seq |
@@ -5724,6 +5755,16 @@ first.implement(types.Nil, function () {
 
 rest.implement(types.Nil, function () {
   return [wasm.i32$const, ...sleb128i32(empty_seq)];
+});
+
+to_seq.implement(types.Nil, function () {
+  return [wasm.i32$const, ...sleb128i32(empty_seq)];
+});
+
+to_vec.implement(types.Nil, function () {
+  return [
+    wasm.i32$const, ...sleb128i32(empty_vector)
+  ];
 });
 
 // todo: will this work for user-defined seqs?
@@ -5771,6 +5812,52 @@ to_seq.implement(types.Seq, function (seq) {
   return [wasm.local$get, ...seq];
 });
 
+to_vec.implement(types.Seq, function (seq) {
+  return [
+    wasm.local$get, ...seq,
+    wasm.call, ...types.Seq.fields.root.uleb128,
+    wasm.call, ...to_vec.uleb128
+  ];
+});
+
+function seq_to_vec (seq) {
+  const arr = this.local(wasm.i32),
+        idx = this.local(wasm.i32);
+  return [
+    wasm.local$get, ...seq,
+    wasm.call, ...count.uleb128,
+    wasm.call, ...refs_array_by_length.uleb128,
+    wasm.local$set, ...arr,
+    wasm.loop, wasm.i32,
+      wasm.local$get, ...seq,
+      wasm.call, ...count.uleb128,
+      wasm.if, wasm.i32,
+        wasm.local$get, ...arr,
+        wasm.local$get, ...idx,
+        wasm.local$get, ...seq,
+        wasm.call, ...first.uleb128,
+        wasm.call, ...refs_array_set.uleb128,
+        wasm.local$get, ...seq,
+        wasm.call, ...rest.uleb128,
+        wasm.local$get, ...idx,
+        wasm.if, wasm.void,
+          wasm.local$get, ...seq,
+          wasm.call, ...free.uleb128,
+        wasm.end,
+        wasm.local$set, ...seq,
+        wasm.local$get, ...idx,
+        wasm.i32$const, 1,
+        wasm.i32$add,
+        wasm.local$set, ...idx,
+        wasm.br, 1,
+      wasm.else,
+        wasm.local$get, ...arr,
+      wasm.end,
+    wasm.end,
+    wasm.call, ...vector_from_array.uleb128
+  ];
+}
+
 /*-------*\
 |         |
 | ConsSeq |
@@ -5813,6 +5900,8 @@ count.implement(types.ConsSeq, function (seq) {
     wasm.i32$add
   ];
 });
+
+to_vec.implement(types.ConsSeq, seq_to_vec);
 
 /*-------*\
 |         |
@@ -5897,6 +5986,8 @@ count.implement(types.LazySeq, function (seq) {
   ];
 });
 
+to_vec.implement(types.LazySeq, seq_to_vec);
+
 const lazy_seq = funcs.build(
   [wasm.i32], [wasm.i32], { comp: "lazy-seq" },
   function (gen) {
@@ -5970,10 +6061,11 @@ rest.implement(types.ConcatSeq, function (seq) {
       wasm.call, ...types.Seq.constr.uleb128,
     wasm.else,
       wasm.local$get, ...right,
-      wasm.call, ...rest.uleb128,
     wasm.end
   ];
 });
+
+to_vec.implement(types.ConcatSeq, seq_to_vec);
 
 const concat = funcs.build(
   [wasm.i32, wasm.i32], [wasm.i32], { comp: "concat" },
@@ -5984,7 +6076,7 @@ const concat = funcs.build(
       wasm.local$get, ...right,
       wasm.call, ...inc_refs.uleb128,
       wasm.call, ...types.ConcatSeq.constr.uleb128,
-      wasm.call, ...types.Seq.constr.uleb128,
+      wasm.call, ...types.Seq.constr.uleb128
     ];
   }
 );
@@ -6098,6 +6190,14 @@ impl_free(types.VectorSeq, function (free_self) {
       wasm.call, ...free.uleb128,
       ...free_self,
     wasm.end
+  ];
+});
+
+// todo: need to account for vec_off
+to_vec.implement(types.VectorSeq, function (seq) {
+  return [
+    wasm.local$get, ...seq,
+    wasm.call, ...types.VectorSeq.fields.vec.uleb128
   ];
 });
 
@@ -6336,6 +6436,8 @@ to_seq.implement(types.HashMap, function (map) {
     wasm.end
   ];
 });
+
+to_vec.implement(types.HashMapSeq, seq_to_vec);
 
 /*------*\
 |        |
@@ -6753,6 +6855,7 @@ const comp_atom = funcs.build(
   }
 );
 
+// todo: why not store main_func and def_func as Functions?
 funcs.build(
   [wasm.i32, wasm.i32, wasm.i32], [wasm.i32], { comp: "defmethod" },
   function (mtd_name, num_args, def_func) {
@@ -6786,6 +6889,14 @@ funcs.build(
         wasm.local$tee, ...def_func,
       wasm.else,
         wasm.local$get, ...def_func,
+        wasm.call, ...types.Function.pred.uleb128,
+        wasm.if, wasm.i32,
+          wasm.local$get, ...def_func,
+          wasm.call, ...types.Function.fields.func_num.uleb128,
+          wasm.local$tee, ...def_func,
+        wasm.else,
+          wasm.local$get, ...def_func,
+        wasm.end,
       wasm.end,
       wasm.local$get, ...mtd_func,
       wasm.call, ...store_method.uleb128,
@@ -7008,6 +7119,17 @@ funcs.build(
     return [
       wasm.local$get, ...val,
       wasm.call, ...print_i32.uleb128,
+      wasm.i32$const, nil
+    ];
+  }
+);
+
+funcs.build(
+  [wasm.i64], [wasm.i32], { comp: "print-i64" },
+  function (val) {
+    return [
+      wasm.local$get, ...val,
+      wasm.call, ...print_i64.uleb128,
       wasm.i32$const, nil
     ];
   }
@@ -8778,11 +8900,6 @@ const expand_form = new_method(1, wasm.i32,
   { comp: "expand-form" }, form => [wasm.local$get, ...form]
 );
 
-// todo: can do syntax-quote in expand-form?
-const syntax_quote = new_method(1, wasm.i32,
-  { comp: "syntax-quote" }, form => [wasm.local$get, ...form]
-);
-
 /*------------*\
 |              |
 | compile-form |
@@ -9394,7 +9511,7 @@ function switch_string_match (str, idx, match_idx, ...clauses) {
         wasm.local$get, ...str,
         wasm.i32$const, ...sleb128i32(cmpr),
         wasm.local$get, ...idx,
-        wasm.call, ...string_matches_from.uleb128,
+        wasm.call, ...string_matches_at.uleb128,
         wasm.if, wasm.i32,
           wasm.local$get, ...idx,
           wasm.i32$const, ...sleb128i32(cmpr),
@@ -9686,27 +9803,6 @@ const parse_map = funcs.build(
       wasm.local$get, ...seq,
       wasm.call, ...free.uleb128,
       wasm.local$get, ...map,
-      wasm.local$get, ...idx,
-      wasm.local$get, ...lineno
-    ];
-  }
-);
-
-const parse_syntax_quote = funcs.build(
-  [wasm.i32, wasm.i32, wasm.i32],
-  [wasm.i32, wasm.i32, wasm.i32], {},
-  function (str, idx, lineno) {
-    const out = this.local(wasm.i32);
-    return [
-      wasm.local$get, ...str,
-      wasm.local$get, ...idx,
-      wasm.i32$const, 1,
-      wasm.i32$add,
-      wasm.local$get, ...lineno,
-      wasm.call, ...read_form.uleb128,
-      wasm.local$set, ...lineno,
-      wasm.local$set, ...idx,
-      wasm.call, ...syntax_quote.uleb128,
       wasm.local$get, ...idx,
       wasm.local$get, ...lineno
     ];
@@ -10010,7 +10106,8 @@ read_form.build(function (str, idx, lineno) {
               wasm.local$get, ...str,
               wasm.local$get, ...idx,
               wasm.local$get, ...lineno,
-              wasm.call, ...parse_syntax_quote.uleb128,
+	      wasm.i32$const, ...sleb128i32(make_symbol("syntax-quote")),
+	      wasm.call, ...parse_quote.uleb128,
               wasm.local$set, ...lineno,
               wasm.local$set, ...idx
             ],

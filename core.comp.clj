@@ -29,56 +29,9 @@
                 (map f (rest coll))))))
         coll))))
 
-(impl syntax-quote Seq
-  (fn f [form]
-    (if (Int$value (count form))
-      (cons 'cons
-        (cons (call-mtd syntax-quote (first form))
-          (cons (f (rest form)) ())))
-      ())))
+(defmethod 'to-str 1 nil)
 
-(def 'aliases (atom {}))
-
-(def 'macros (atom {}))
-
-(impl expand-form Seq
-  (fn _ [form]
-    (if (Int$value (count form))
-      (let [head (call-mtd expand-form (first form))
-            tail (rest form)
-            special
-              (if (Symbol$instance head)
-                (let [macro (get (call-mtd deref macros) head nil)]
-                  (if macro
-                    (macro tail)
-                    (if (eq head 'defmacro)
-                      (cons 'do (cons form (cons (cons 'compile ()) ())))
-                      nil)))
-                nil)]
-        (if special special
-          (cons head (map expand-form tail))))
-      form)))
-
-(def 'defmacro
-  (fn _ [nm fn]
-    (do (call-mtd reset! macros (assoc (call-mtd deref macros) nm fn))
-        fn)))
-
-;; impl needs double compile
-(compile)
-(compile)
-
-(defmacro 'or
-  (fn _ [args]
-    (cons 'if
-      (cons (first args)
-        (cons (first args)
-          (cons (first (rest args))
-            ()))))))
-
-(defmethod 'str 1 nil)
-
-(defmethod 'pr-str 1 str)
+(defmethod 'pr-str 1 to-str)
 
 (def 'pr
   (fn _ [x]
@@ -90,16 +43,16 @@
     (concat-str "\""
       (concat-str s "\""))))
 
-(impl str Nil (fn _ [_] "nil"))
-(impl str True (fn _ [_] "true"))
-(impl str False (fn _ [_] "false"))
-(impl str String (fn _ [s] s))
+(impl to-str Nil (fn _ [_] "nil"))
+(impl to-str True (fn _ [_] "true"))
+(impl to-str False (fn _ [_] "false"))
+(impl to-str String (fn _ [s] s))
 
-(impl str Int
+(impl to-str Int
   (fn _ [i]
     (i64->string (Int$value i))))
 
-(impl str Symbol
+(impl to-str Symbol
   (fn _ [sym]
     (let [ns (Symbol$namespace sym)
           nm (Symbol$name sym)]
@@ -108,7 +61,7 @@
           (concat-str "/" nm))
         nm))))
 
-(impl str Keyword
+(impl to-str Keyword
   (fn _ [sym]
     (let [ns (Keyword$namespace sym)
           nm (Keyword$name sym)]
@@ -118,22 +71,24 @@
             (concat-str "/" nm))
           nm)))))
 
-(impl str Vector
+(impl to-str Vector
   (fn _ [vec]
-    (let [n (Int$value (Vector$count vec))
-          i (Int$value 0)
-          s (atom "[")]
-      (loop
-        (let [el (call-mtd pr-str (nth vec (Int$new i) nil))
-              new-s (concat-str (call-mtd deref s) el)]
-          (if (i64/eq i (i64/sub n (Int$value 1)))
-            (concat-str new-s "]")
-            (do
-              (call-mtd reset! s (concat-str new-s " "))
-              (set-local i (i64/add i (Int$value 1)))
-              (recur))))))))
+    (let [n (Int$value (Vector$count vec))]
+      (if n
+        (let [i (Int$value 0)
+              s (atom "[")]
+          (loop
+            (let [el (call-mtd pr-str (nth vec (Int$new i) nil))
+                  new-s (concat-str (call-mtd deref s) el)]
+              (if (i64/eq i (i64/sub n (Int$value 1)))
+                (concat-str new-s "]")
+                (do
+                  (call-mtd reset! s (concat-str new-s " "))
+                  (set-local i (i64/add i (Int$value 1)))
+                  (recur))))))
+        "[]"))))
 
-(impl str HashMap
+(impl to-str HashMap
   (fn _ [m]
     (let [m (atom (to-seq m))
           s (atom "{")]
@@ -151,7 +106,7 @@
               (recur))
             (concat-str new-s "}")))))))
 
-(impl str Seq
+(impl to-str Seq
   (fn _ [seq]
     (if (Int$value (count seq))
       (let [seq (atom seq)
@@ -167,10 +122,134 @@
               (concat-str new-s ")")))))
       "()")))
 
-(def 'inc
-  (fn _ [x]
-    (Int$new (i64/add (Int$value x) (Int$value 1)))))
+(compile)
 
+(defmethod 'syntax-quote 1 (fn _ [x] x))
+
+(impl syntax-quote Seq
+  (fn f [form]
+    (if (Int$value (count form))
+      (cons 'concat
+        (cons
+          (cons 'cons
+            (cons
+              (let [head (first form)]
+                (if
+                  (if (Seq$instance head)
+                    (eq (first head) 'unquote)
+                    false)
+                  (first (rest head))
+                  (call-mtd syntax-quote head)))
+              (cons () ())))
+          (cons (f (rest form)) ())))
+      ())))
+
+(impl syntax-quote Vector
+  (fn _ [vec]
+    (cons 'to-vec
+      (cons
+        (call-mtd syntax-quote (to-seq vec))
+        ()))))
+
+(def 'not
+  (fn _ [x]
+    (if (eq x false)
+      true
+      (if (eq x nil)
+        true
+        false))))
+
+(def '+
+  (fn _ [x y]
+    (Int$new
+      (i64/add
+        (Int$value x)
+        (Int$value y)))))
+
+(def 'inc (fn _ [x] (+ x 1)))
+
+(def '-
+  (fn _ [x y]
+    (Int$new
+      (i64/sub
+        (Int$value x)
+        (Int$value y)))))
+
+(def 'dec (fn _ [x] (- x 1)))
+
+(def 'string-ends-with
+  (fn _ [string substring]
+    (string-matches-at string substring
+      (Int$new
+        (i64/sub
+          (Int$value (String$length string))
+          (Int$value (String$length substring)))))))
+
+(def 'gensym-counter (atom 0))
+
+(impl syntax-quote Symbol
+  (fn f [sym]
+    (let [ns (Symbol$namespace sym)
+          nm (Symbol$name sym)
+          nm (if (not ns)
+               (if (string-ends-with nm "#")
+                 (concat-str
+                   (concat-str
+                     (substring-until nm 0 (- (String$length nm) 1))
+                     "__gensym__")
+                   (to-str (call-mtd deref gensym-counter)))
+                 nm)
+               nm)]
+      (cons 'symbol
+        (cons ns
+          (cons nm ()))))))
+
+(def 'aliases (atom {}))
+
+(def 'macros (atom {}))
+
+(impl expand-form Seq
+  (fn _ [form]
+    (if (Int$value (count form))
+      (let [head (call-mtd expand-form (first form))
+            tail (rest form)
+            special
+              (if (Symbol$instance head)
+                (if (eq head 'syntax-quote)
+                  (let [gensym-num (call-mtd deref gensym-counter)
+                        form (call-mtd syntax-quote (first tail))]
+                    (do (call-mtd reset! gensym-counter (inc gensym-num))
+                        (call-mtd expand-form form)))
+                  (let [macro (get (call-mtd deref macros) head nil)]
+                    (if macro
+                      (call-mtd expand-form (macro tail))
+                      nil)))
+                nil)]
+        (if special special
+          (cons head (map expand-form tail))))
+      form)))
+
+(compile)
+
+(call-mtd reset! macros
+  (assoc (call-mtd deref macros) 'defmacro
+    (fn _ [args]
+      (let [nm (first args)
+            fn (first (rest args))]
+       `(do (compile)
+          (call-mtd reset! macros
+            (assoc (call-mtd deref macros) ~nm ~fn)))))))
+
+(compile)
+
+(defmacro 'or
+  (fn _ [args]
+   ;`(if ~(first args) ~(first args) ~(first (rest args)))))
+   `(let [x# ~(first args)]
+      (if x# x# 
+       ~(first (rest args))))))
+
+(pr `x#)
 (pr `(1 2 3))
 (pr (string-length "abc"))
 (pr (substring "abcd" 1 3))
@@ -192,4 +271,4 @@
       (if s*
         s*
         (throw s
-          (concat-str "symbol not found: " (call-mtd str s)))))))
+          (concat-str "symbol not found: " (call-mtd to-str s)))))))
