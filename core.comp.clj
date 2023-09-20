@@ -1,3 +1,7 @@
+;; todo:
+;; expand tagged numbers to (Int$value) and (Float$value)
+;; check vector/map for nested runtime ops, change to forms
+
 (defmethod 'invoke 2 nil)
 
 (impl invoke VariadicFunction
@@ -12,13 +16,21 @@
   (fn _ [m arg]
     (call-mtd m arg)))
 
+(defmethod 'to-str 1 nil)
+
+(defmethod 'pr-str 1 to-str)
+
+(def 'pr
+  (fn _ [x]
+    (js/console.log (call-mtd pr-str x))))
+
 (def 'map
   (fn map [f coll]
     (let [coll (to-seq coll)]
       (if (Int$value (count coll))
         (lazy-seq
           (fn _ {:params [args]
-                 :scope [map f coll]}
+                 :scope (cons map (cons f (cons coll ())))}
             (let [map (first args)
                   args (rest args)
                   f (first args)
@@ -28,14 +40,6 @@
                 (call-mtd invoke f (first coll))
                 (map f (rest coll))))))
         coll))))
-
-(defmethod 'to-str 1 nil)
-
-(defmethod 'pr-str 1 to-str)
-
-(def 'pr
-  (fn _ [x]
-    (js/console.log (call-mtd pr-str x))))
 
 ;; todo: escape double quotes
 (impl pr-str String
@@ -244,9 +248,8 @@
 
 (defmacro 'or
   (fn _ [args]
-   ;`(if ~(first args) ~(first args) ~(first (rest args)))))
    `(let [x# ~(first args)]
-      (if x# x# 
+      (if x# x#
        ~(first (rest args))))))
 
 (pr `x#)
@@ -265,10 +268,10 @@
 (pr (or 17 "this should not print"))
 (pr (or nil "this should print"))
 
-(impl expand-form Symbol
-  (fn _ [s]
-    (let [s* (get (call-mtd deref aliases) s nil)]
-      (if s*
-        s*
-        (throw s
-          (concat-str "symbol not found: " (call-mtd to-str s)))))))
+;(impl expand-form Symbol
+;  (fn _ [s]
+;    (let [s* (get (call-mtd deref aliases) s nil)]
+;      (if s*
+;        s*
+;        (throw s
+;          (concat-str "symbol not found: " (call-mtd to-str s)))))))
