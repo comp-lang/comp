@@ -81,7 +81,7 @@
       (if n
         (let [i (Int$value 0)
               s (atom "[")]
-          (loop
+          (loop [vec s]
             (let [el (call-mtd pr-str (nth vec (Int$new i) nil))
                   new-s (concat-str (call-mtd deref s) el)]
               (if (i64/eq i (i64/sub n (Int$value 1)))
@@ -96,7 +96,7 @@
   (fn _ [m]
     (let [m (atom (to-seq m))
           s (atom "{")]
-      (loop
+      (loop [m s]
         (let [kv (first (call-mtd deref m))
               k (pr-str (LeafNode$key kv))
               v (pr-str (LeafNode$val kv))
@@ -115,7 +115,7 @@
     (if (Int$value (count seq))
       (let [seq (atom seq)
             s (atom "(")]
-        (loop
+        (loop [seq s]
           (let [val (call-mtd pr-str (first (call-mtd deref seq)))
                 new-s (concat-str (call-mtd deref s) val)
                 seq (call-mtd reset! seq (rest (call-mtd deref seq)))]
@@ -178,6 +178,12 @@
       (i64/sub
         (Int$value x)
         (Int$value y)))))
+
+(def '<
+  (fn _ [x y]
+    (if (i64/lt_u (Int$value x) (Int$value y))
+      true
+      false)))
 
 (def 'dec (fn _ [x] (- x 1)))
 
