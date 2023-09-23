@@ -3964,9 +3964,9 @@ substring.implement(types.String, function (str, start, len) {
     wasm.local$get, ...str,
     wasm.call, ...types.String.fields.arr.uleb128,
     wasm.local$get, ...start,
-    // length is meaningless since array has to be multiples of four
-    // and string uses its own length for iterating
-    wasm.i32$const, 0,
+    wasm.i32$const, ...len,
+    wasm.i32$const, 4,
+    wasm.call, ...i32_div_ceil.uleb128,
     wasm.call, ...subarray.uleb128,
     wasm.local$get, ...len,
     wasm.call, ...types.String.constr.uleb128
@@ -5830,7 +5830,6 @@ map_node_lookup.implement(types.LeafNode, function (
     wasm.call, ...eq.uleb128,
     wasm.if, wasm.i32,
       wasm.local$get, ...node,
-      wasm.call, ...types.LeafNode.fields.val.uleb128,
     wasm.else,
       wasm.i32$const, ...sleb128i32(no_entry),
     wasm.end
@@ -5854,7 +5853,6 @@ map_node_lookup.implement(types.HashCollisionNode, function (
       wasm.local$tee, ...leaf,
       wasm.if, wasm.i32,
         wasm.local$get, ...leaf,
-        wasm.call, ...types.LeafNode.fields.val.uleb128,
       wasm.else,
         wasm.i32$const, ...sleb128i32(no_entry),
       wasm.end,
@@ -5901,6 +5899,7 @@ assoc.implement(types.HashMap, function (map, key, val) {
   ];
 });
 
+// todo: get rid of not_found, handle in comp
 get.implement(types.HashMap, function (map, key, not_found) {
   const result = this.local(wasm.i32);
   return [
@@ -5918,9 +5917,25 @@ get.implement(types.HashMap, function (map, key, not_found) {
       wasm.local$get, ...not_found,
     wasm.else,
       wasm.local$get, ...result,
+      wasm.call, ...types.LeafNode.fields.val.uleb128,
     wasm.end
   ];
 });
+
+const get_map_entry = funcs.build(
+  [wasm.i32, wasm.i32], [wasm.i32], {},
+  function (map, key) {
+    return [
+      wasm.local$get, ...map,
+      wasm.call, ...types.HashMap.fields.root.uleb128,
+      wasm.i32$const, 0,
+      wasm.local$get, ...key,
+      wasm.call, ...hash.uleb128,
+      wasm.local$get, ...key,
+      wasm.call, ...map_node_lookup.uleb128
+    ];
+  }
+);
 
 count.implement(types.HashMap, function (map) {
   return [
@@ -6656,10 +6671,16 @@ to_vec.implement(types.HashMapSeq, seq_to_vec);
 |        |
 \*------*/
 
+const symbols = new_atom(empty_hash_map),
+      keywords = new_atom(empty_hash_map);
+
 const symkw = function (which) {
-  const store = new_atom(empty_hash_map);
-  let type = types.Symbol;
-  if (which === "keyword") type = types.Keyword;
+  let type = types.Symbol,
+      store = symbols;
+  if (which === "keyword") {
+    type = types.Keyword;
+    store = keywords;
+  }
   return funcs.build(
     [wasm.i32, wasm.i32],
     [wasm.i32], { export: which, comp: which },
@@ -6672,11 +6693,19 @@ const symkw = function (which) {
         wasm.call, ...atom_swap_lock.uleb128,
         wasm.local$tee, ...syms,
         wasm.local$get, ...namespace,
-        wasm.i32$const, 0,
-        wasm.call, ...get.uleb128,
+        wasm.call, ...get_map_entry.uleb128,
         wasm.local$tee, ...with_ns,
+        wasm.i32$const, ...sleb128i32(no_entry),
+        wasm.i32$ne,
         wasm.if, wasm.i32,
+          wasm.local$get, ...namespace,
+          wasm.call, ...free.uleb128,
           wasm.local$get, ...with_ns,
+          wasm.call, ...types.LeafNode.fields.key.uleb128,
+          wasm.local$set, ...namespace,
+          wasm.local$get, ...with_ns,
+          wasm.call, ...types.LeafNode.fields.val.uleb128,
+          wasm.local$tee, ...with_ns,
           wasm.local$get, ...name,
           wasm.i32$const, 0,
           wasm.call, ...get.uleb128,
@@ -6687,6 +6716,10 @@ const symkw = function (which) {
           wasm.i32$const, 0,
         wasm.end,
         wasm.if, wasm.void,
+          wasm.local$get, ...namespace,
+          wasm.call, ...free.uleb128,
+          wasm.local$get, ...name,
+          wasm.call, ...free.uleb128,
           wasm.i32$const, ...sleb128i32(store),
           wasm.call, ...atom_swap_unlock.uleb128,
           wasm.drop,
@@ -6737,6 +6770,143 @@ const make_symbol = make_symkw("symbol");
 const make_keyword = make_symkw("keyword");
 
 compile();
+
+/*----*\
+|      |
+| size |
+|      |
+\*----*/
+
+const size = pre_new_method(1, 0, 0, wasm.i32, { export: "size" });
+
+size.implement(types.Nil, () => [wasm.i32$const, 4]);
+
+size.implement(types.Array, function (arr) {
+  return [
+    wasm.i32$const, ...sleb128i32(types.Array.size),
+    wasm.local$get, ...arr,
+    wasm.call, ...types.Array.fields.length.uleb128,
+    wasm.i32$add,
+    wasm.local$get, ...arr,
+    wasm.call, ...types.Array.fields.original.uleb128,
+    wasm.call, ...size.uleb128,
+    wasm.i32$add
+  ];
+});
+
+size.implement(types.String, function (str) {
+  return [
+    wasm.i32$const, ...sleb128i32(types.String.size),
+    wasm.local$get, ...str,
+    wasm.call, ...types.String.fields.arr.uleb128,
+    wasm.call, ...size.uleb128,
+    wasm.i32$add
+  ];
+});
+
+size.implement(types.Symbol, function (sym) {
+  return [
+    wasm.i32$const, ...sleb128i32(types.Symbol.size),
+    wasm.local$get, ...sym,
+    wasm.call, ...types.Symbol.fields.namespace.uleb128,
+    wasm.call, ...size.uleb128,
+    wasm.i32$add,
+    wasm.local$get, ...sym,
+    wasm.call, ...types.Symbol.fields.name.uleb128,
+    wasm.call, ...size.uleb128,
+    wasm.i32$add
+  ];
+});
+
+size.implement(types.RefsArray, function (arr) {
+  const len = this.local(wasm.i32),
+        idx = this.local(wasm.i32),
+        out = this.local(wasm.i32);
+  return [
+    wasm.i32$const, ...sleb128i32(types.RefsArray.size),
+    wasm.i32$const, ...sleb128i32(types.Array.size),
+    wasm.i32$add,
+    wasm.local$set, ...out,
+    wasm.local$get, ...arr,
+    wasm.call, ...types.RefsArray.fields.arr.uleb128,
+    wasm.call, ...types.Array.fields.length.uleb128,
+    wasm.local$set, ...len,
+    wasm.loop, wasm.void,
+      wasm.local$get, ...idx,
+      wasm.local$get, ...len,
+      wasm.i32$lt_u,
+      wasm.if, wasm.void,
+        wasm.local$get, ...arr,
+        wasm.local$get, ...idx,
+        wasm.call, ...refs_array_get.uleb128,
+        wasm.call, ...size.uleb128,
+        wasm.local$get, ...out,
+        wasm.i32$add,
+        wasm.local$set, ...out,
+        wasm.local$get, ...idx,
+        wasm.i32$const, 1,
+        wasm.i32$add,
+        wasm.local$set, ...idx,
+        wasm.br, 1,
+      wasm.end,
+    wasm.end,
+    wasm.local$get, ...out
+  ];
+});
+
+size.implement(types.PartialNode, function (node) {
+  return [
+    wasm.i32$const, ...sleb128i32(types.PartialNode.size),
+    wasm.local$get, ...node,
+    wasm.call, ...types.PartialNode.fields.arr.uleb128,
+    wasm.call, ...size.uleb128,
+    wasm.i32$add
+  ];
+});
+
+size.implement(types.FullNode, function (node) {
+  return [
+    wasm.i32$const, ...sleb128i32(types.FullNode.size),
+    wasm.local$get, ...node,
+    wasm.call, ...types.FullNode.fields.arr.uleb128,
+    wasm.call, ...size.uleb128,
+    wasm.i32$add
+  ];
+});
+
+size.implement(types.HashCollisionNode, function (node) {
+  return [
+    wasm.i32$const, ...sleb128i32(types.HashCollisionNode.size),
+    wasm.local$get, ...node,
+    wasm.call, ...types.HashCollisionNode.fields.arr.uleb128,
+    wasm.call, ...size.uleb128,
+    wasm.i32$add
+  ];
+});
+
+size.implement(types.LeafNode, function (node) {
+  return [
+    wasm.i32$const, ...sleb128i32(types.LeafNode.size),
+    wasm.local$get, ...node,
+    wasm.call, ...types.LeafNode.fields.key.uleb128,
+    wasm.call, ...size.uleb128,
+    wasm.i32$add,
+    wasm.local$get, ...node,
+    wasm.call, ...types.LeafNode.fields.val.uleb128,
+    wasm.call, ...size.uleb128,
+    wasm.i32$add
+  ];
+});
+
+size.implement(types.HashMap, function (map) {
+  return [
+    wasm.i32$const, ...sleb128i32(types.HashMap.size),
+    wasm.local$get, ...map,
+    wasm.call, ...types.HashMap.fields.root.uleb128,
+    wasm.call, ...size.uleb128,
+    wasm.i32$add
+  ];
+});
 
 /*----------*\
 |            |
@@ -7047,7 +7217,7 @@ to_js.implement(types.String, function (str) {
 \*-----------*/
 
 // todo: should these really be methods?
-const deref = new_method(1, wasm.i32, { comp: "deref" });
+const deref = new_method(1, wasm.i32, { export: "deref", comp: "deref" });
 
 deref.implement(types.Atom, atom_deref.func_idx);
 
