@@ -4,35 +4,26 @@
 // todo: better JS api (e.g. importing/exporting objects/methods)
 // todo: Infinity & NaN
 // todo: in worker threads, import should only add to import object
-// todo: indirect function type (not partial)
 // todo: use SIMD for faster string/array comparison?
-// todo: check for temporary instances in functions that need to be freed
 // todo: ensure all array operations check bounds
 // todo: check if safe_add_i32 should be used more
 // todo: check if should be using more atomic ops
 // todo: make field_setters thread safe?
-// todo: gensym/namespace syntax quoted symbol
 // todo: review all values created here (e.g. cached_string()) and consolidate/free
 // todo: should String have an array or just a memory block?
 // todo: review what's not needed in a compiled file
 // todo: handle String/File encodings other than UTF8
-// todo: emit number literal directly
-// todo: when freeing atom, are we also freeing the value every time?
-// todo: when freeing collections, are we also freeing contents?
 // todo: avoid freeing static globals with inc_refs instead of checking count
 // todo: store comp default function in Method so it can be partialed/store local scope
 // todo: change type_num to i16, local_refs to i8, leave i8 empty before refs
 // todo: using append_varsint32 vs append_varuint32 in all the right places?
 // todo: make callable as a library (export init)
-// todo: store special characters of string to make escaping easier
+// todo: store special characters of string to make escaping faster
 // todo: select features to include in compiled file (reading files, interpreting code, etc)
-// todo: review emit_code section to make sure everything is being freed properly
 // todo: allow setting initial & max memory pages
-// todo: store module_code before parsing, interpret macros & reader macros, & expand forms before storing
 // todo: direct data ops on file (change memory ops to function calls)
 // todo: move free to thread
 // todo: don't convert file to string - just read bytes
-// todo: free in loop
 // todo: free-recursive for collections
 
 (function init (module_code, module_len, module_off, start_funcs_len, mem_len) {
@@ -2856,7 +2847,34 @@ function pre_new_method (num_i32, num_i64, num_f64, res, opts, def_func) {
 |      |
 \*----*/
 
+const read_refs = funcs.build(
+  [wasm.i32], [wasm.i32], {},
+  function (val) {
+    return [
+      wasm.local$get, ...val,
+      wasm.i32$const, ...sleb128i32(types.Symbol.fields.refs.offset),
+      wasm.i32$add,
+      wasm.atomic$prefix,
+      wasm.i32$atomic$load, 2, 0,
+      wasm.i32$const, ...sleb128i32(0x3fffffff), // strip first two bits
+      wasm.i32$and
+    ];
+  }
+);
+
 const free = pre_new_method(1, 0, 0, 0, { export: "free" });
+const free_recursive = pre_new_method(1, 0, 0, 0, {}, function (val) {
+  return [
+    wasm.local$get, ...val,
+    wasm.call, ...read_refs.uleb128,
+    wasm.i32$const, 1,
+    wasm.i32$eq,
+    wasm.if, wasm.void,
+      wasm.local$get, ...val,
+      wasm.call, ...free.uleb128,
+    wasm.end
+  ];
+});
 
 function impl_free (type, free_self) {
   return free.implement(type, function (val) {
@@ -3140,6 +3158,38 @@ impl_free(types.RefsArray, function (free_self) {
     wasm.local$get, ...inr,
     wasm.call, ...free.uleb128,
     ...free_self
+  ];
+});
+
+free_recursive.implement(types.RefsArray, function (arr) {
+  const len = this.local(wasm.i32),
+        idx = this.local(wasm.i32);
+  return [
+    wasm.local$get, ...arr,
+    wasm.call, ...read_refs.uleb128,
+    wasm.i32$eqz,
+    wasm.if, wasm.void,
+      wasm.local$get, ...arr,
+      wasm.call, ...types.RefsArray.fields.arr.uleb128,
+      wasm.call, ...types.Array.fields.length.uleb128,
+      wasm.local$set, ...len,
+      wasm.loop, wasm.void,
+        wasm.local$get, ...idx,
+        wasm.local$get, ...len,
+        wasm.i32$lt_u,
+        wasm.if, wasm.void,
+          wasm.local$get, ...arr,
+          wasm.local$get, ...idx,
+          wasm.call, ...refs_array_get.uleb128,
+          wasm.call, ...free_recursive.uleb128,
+          wasm.local$get, ...idx,
+          wasm.i32$const, 1,
+          wasm.i32$add,
+          wasm.local$set, ...idx,
+          wasm.br, 1,
+        wasm.end,
+      wasm.end,
+    wasm.end
   ];
 });
 
@@ -3582,6 +3632,22 @@ impl_free(types.Atom, function (free_self) {
     wasm.call, ...types.Atom.fields.data.uleb128,
     wasm.call, ...free.uleb128,
     ...free_self
+  ];
+});
+
+free_recursive.implement(types.Atom, function (atom) {
+  return [
+    wasm.local$get, ...atom,
+    wasm.call, ...read_refs.uleb128,
+    wasm.i32$const, 1,
+    wasm.i32$eq,
+    wasm.if, wasm.void,
+      wasm.local$get, ...atom,
+      wasm.call, ...free.uleb128,
+      wasm.local$get, ...atom,
+      wasm.call, ...atom_deref.uleb128,
+      wasm.call, ...free_recursive.uleb128,
+    wasm.end
   ];
 });
 
@@ -5245,6 +5311,45 @@ impl_free(types.HashMap, function (free_self) {
       wasm.call, ...types.HashMap.fields.root.uleb128,
       wasm.call, ...free.uleb128,
       ...free_self,
+    wasm.end
+  ];
+});
+
+function map_node_free_recursive (node) {
+  const arr = this.local(wasm.i32),
+        len = this.local(wasm.i32),
+        idx = this.local(wasm.i32);
+  return [
+    wasm.local$get, ...node,
+    wasm.call, ...types.PartialNode.fields.arr.uleb128,
+    wasm.call, ...free_recursive.uleb128
+  ];
+}
+
+free_recursive.implement(types.PartialNode, map_node_free_recursive);
+free_recursive.implement(types.FullNode, map_node_free_recursive);
+free_recursive.implement(types.HashCollisionNode, map_node_free_recursive);
+
+free_recursive.implement(types.LeafNode, function (node) {
+  return [
+    wasm.local$get, ...node,
+    wasm.call, ...types.LeafNode.fields.key.uleb128,
+    wasm.call, ...free_recursive.uleb128,
+    wasm.local$get, ...node,
+    wasm.call, ...types.LeafNode.fields.val.uleb128,
+    wasm.call, ...free_recursive.uleb128,
+  ];
+});
+
+free_recursive.implement(types.HashMap, function (map) {
+  return [
+    wasm.local$get, ...map,
+    wasm.call, ...read_refs.uleb128,
+    wasm.i32$eqz,
+    wasm.if, wasm.void,
+      wasm.local$get, ...map,
+      wasm.call, ...types.HashMap.fields.root.uleb128,
+      wasm.call, ...free_recursive.uleb128,
     wasm.end
   ];
 });
@@ -7931,11 +8036,11 @@ const comp_func_set_params = funcs.build(
         wasm.i32$const, ...sleb128i32(make_keyword("params")),
         wasm.local$get, ...config,
         wasm.call, ...assoc.uleb128,
+        wasm.local$get, ...config,
+        wasm.call, ...free.uleb128,
       wasm.else,
         wasm.local$get, ...config,
       wasm.end,
-      wasm.local$get, ...config,
-      wasm.call, ...free.uleb128,
       wasm.local$tee, ...config,
       wasm.i32$const, ...sleb128i32(make_keyword("params")),
       wasm.i32$const, nil,
@@ -8667,8 +8772,14 @@ def_special_form("fn", function (func, form, env) {
       wasm.call, ...append_varsint32.uleb128,
       wasm.drop,
     wasm.end,
-    //wasm.local$get, ...params,
-    //wasm.call, ...free.uleb128,
+    wasm.local$get, ...inner_env,
+    wasm.call, ...free_recursive.uleb128,
+    wasm.local$get, ...inner_env,
+    wasm.call, ...free.uleb128,
+    wasm.local$get, ...config,
+    wasm.call, ...free_recursive.uleb128,
+    wasm.local$get, ...config,
+    wasm.call, ...free.uleb128,
     wasm.i32$const, 2
   ];
 });
@@ -8778,6 +8889,7 @@ def_special_form("loop", function (func, forms, env) {
     wasm.local$get, ...forms,
     wasm.call, ...free.uleb128,
     wasm.local$get, ...env,
+// todo: recursive?
     wasm.call, ...free.uleb128,
     wasm.local$get, ...return_type
   ];
@@ -8923,6 +9035,7 @@ def_special_form("if", function (func, forms, env) {
     wasm.call, ...stage_val_to_free.uleb128,
     wasm.drop,
     wasm.local$get, ...env,
+// todo: recursive?
     wasm.call, ...free.uleb128,
     wasm.local$get, ...result2,
   ];
@@ -9165,6 +9278,7 @@ def_special_form("do", function (func, forms, env) {
     wasm.call, ...append_code.uleb128,
     wasm.drop,
     wasm.local$get, ...env,
+// todo: recursive?
     wasm.call, ...free.uleb128,
     wasm.local$get, ...forms,
     wasm.call, ...free.uleb128,
@@ -9478,8 +9592,12 @@ const compile_form = funcs.build(
     const out = this.local(wasm.i32),
           func = this.local(wasm.i32),
           new_form = this.local(wasm.i32),
-          env = this.local(wasm.i32);
+          env = this.local(wasm.i32),
+          a = this.local(wasm.i32);
     return [
+wasm.i32$const, ...sleb128i32(next_addr),
+wasm.i32$load, 2, 0,
+wasm.local$set, ...a,
       wasm.local$get, ...form,
       wasm.call, ...expand_form.uleb128,
       wasm.local$get, ...form,
@@ -9526,7 +9644,14 @@ const compile_form = funcs.build(
         wasm.call, ...compile.uleb128,
       wasm.end,
       wasm.local$get, ...env,
+      wasm.call, ...free_recursive.uleb128,
+      wasm.local$get, ...env,
       wasm.call, ...free.uleb128,
+wasm.i32$const, ...sleb128i32(next_addr),
+wasm.i32$load, 2, 0,
+wasm.local$get, ...a,
+wasm.i32$sub,
+wasm.call, ...print_i32.uleb128,
       wasm.local$get, ...out,
       wasm.i32$load, 2, 0,
       wasm.local$get, ...out,
@@ -10768,6 +10893,7 @@ const eval_stream = funcs.build(
         wasm.local$set, ...idx,
         wasm.local$tee, ...form,
         wasm.call, ...compile_form.uleb128,
+// todo: recursive?
         wasm.call, ...free.uleb128,
       wasm.end,
       wasm.local$get, ...idx,
