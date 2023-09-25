@@ -94,21 +94,23 @@
 
 (impl to-str HashMap
   (fn _ [m]
-    (let [m (atom (to-seq m))
-          s (atom "{")]
-      (loop [m s]
-        (let [kv (first (call-mtd deref m))
-              k (pr-str (LeafNode$key kv))
-              v (pr-str (LeafNode$val kv))
-              new-s (concat-str (call-mtd deref s)
-                      (concat-str k
-                        (concat-str " " v)))
-              m (call-mtd reset! m (rest (call-mtd deref m)))]
-          (if (Int$value (count m))
-            (do
-              (call-mtd reset! s (concat-str new-s " "))
-              (recur))
-            (concat-str new-s "}")))))))
+    (if (Int$value (HashMap$count m))
+      (let [m (atom (to-seq m))
+            s (atom "{")]
+        (loop [m s]
+          (let [kv (first (call-mtd deref m))
+                k (pr-str (LeafNode$key kv))
+                v (pr-str (LeafNode$val kv))
+                new-s (concat-str (call-mtd deref s)
+                        (concat-str k
+                          (concat-str " " v)))
+                m (call-mtd reset! m (rest (call-mtd deref m)))]
+            (if (Int$value (count m))
+              (do
+                (call-mtd reset! s (concat-str new-s " "))
+                (recur))
+              (concat-str new-s "}")))))
+      "{}")))
 
 (impl to-str Seq
   (fn _ [seq]
