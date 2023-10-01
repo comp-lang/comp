@@ -878,6 +878,13 @@ const print_i64 = import_func(
   }
 );
 
+const print_string = import_func(
+  1, 0, 0, [],
+  function (str) {
+    console.log(comp_string_to_js(str));
+  }
+);
+
 end_package();
 
 const funcs = {
@@ -1127,7 +1134,6 @@ function print_code (idx) {
 const end_func = import_func(
   1, 0, 0, [wasm.i32],
   function (idx) {
-	  // if (open_funcs[idx].func_idx === 1005) print_code(idx);
     const out = func(open_funcs[idx]);
     open_funcs[idx] = next_func_idx;
     next_func_idx = idx;
@@ -2279,14 +2285,12 @@ define_type(
 define_type(
   "Float", 0,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "value", "f64", 0, 0, wasm.f64, 0
 );
 
 define_type(
   "Object", 1,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "address", "i32", 0, 0, 0, 1
 );
@@ -2294,7 +2298,6 @@ define_type(
 define_type(
   "String", 1,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "arr", "i32", 0, 0, wasm.i32, 1,
   "length", "i32", 0, 0, wasm.i64, 1
@@ -2303,7 +2306,6 @@ define_type(
 define_type(
   "File", 1,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "fd", "i32", 0, 0, wasm.i64, 1
 );
@@ -2311,7 +2313,6 @@ define_type(
 define_type(
   "Exception", 0,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "data", "i32", 0, 0, wasm.i32, 0,
   "msg", "i32", 0, 0, wasm.i32, 1
@@ -2320,7 +2321,6 @@ define_type(
 define_type(
   "Symbol", 0,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "namespace", "i32", 0, 0, wasm.i32, 0,
   "name", "i32", 0, 0, wasm.i32, 0
@@ -2329,7 +2329,6 @@ define_type(
 define_type(
   "Keyword", 0,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "namespace", "i32", 0, 0, wasm.i32, 0,
   "name", "i32", 0, 0, wasm.i32, 0
@@ -2338,7 +2337,6 @@ define_type(
 define_type(
   "Function", 0,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "func_num", "i32", 0, 0, wasm.i64, 1,
   "tbl_idx", "i32", 0, 0, 0, 0,
@@ -2352,7 +2350,6 @@ define_type(
 define_type(
   "VariadicFunction", 0,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "func", "i32", 0, 0, wasm.i32, 0,
   "args", "i32", 0, 0, wasm.i32, 0
@@ -2361,7 +2358,6 @@ define_type(
 define_type(
   "Method", 0,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "num", "i32", 0, 0, 0, 0,
   "default_func", "i32", 0, 0, 0, 0,
@@ -2371,7 +2367,6 @@ define_type(
 define_type(
   "Array", 0,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "arr", "i32", 0, 0, 0, 1,
   "length", "i32", 0, 0, wasm.i64, 1,
@@ -2381,7 +2376,6 @@ define_type(
 define_type(
   "RefsArray", 0,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "arr", "i32", 0, 0, 0, 0
 );
@@ -2389,7 +2383,6 @@ define_type(
 define_type(
   "Atom", 1,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "data", "i32", 0, 0, 0, 0,
   "mutex", "i32", 0, 0, 0, 0
@@ -2398,7 +2391,6 @@ define_type(
 define_type(
   "TaggedData", 0,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "tag", "i32", 0, 0, wasm.i32, 0,
   "data", "i32", 0, 0, wasm.i32, 0
@@ -2407,7 +2399,6 @@ define_type(
 define_type(
   "Metadata", 0,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "meta", "i32", 0, 0, wasm.i32, 0,
   "data", "i32", 0, 0, wasm.i32, 0
@@ -2416,7 +2407,6 @@ define_type(
 define_type(
   "Type", 1,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "num", "i32", 0, 0, 0, 0
 );
@@ -2424,7 +2414,6 @@ define_type(
 define_type(
   "PartialNode", 1,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "arr", "i32", 0, 0, 0, 0,
   "bitmap", "i32", 0, 0, 0, 0
@@ -2433,7 +2422,6 @@ define_type(
 define_type(
   "FullNode", 0,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "arr", "i32", 0, 0, 0, 0
 );
@@ -2441,7 +2429,6 @@ define_type(
 define_type(
   "HashCollisionNode", 0,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "arr", "i32", 0, 0, 0, 0,
   "collision_hash", "i32", 0, 0, 0, 0
@@ -2450,7 +2437,6 @@ define_type(
 define_type(
   "LeafNode", 0,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "key", "i32", 0, 0, wasm.i32, 0,
   "val", "i32", 0, 0, wasm.i32, 0
@@ -2459,7 +2445,6 @@ define_type(
 define_type(
   "HashMap", 1,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "root", "i32", 0, 0, 0, 0,
   "count", "i32", 0, 0, wasm.i64, 0
@@ -2468,7 +2453,6 @@ define_type(
 define_type(
   "Vector", 1,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "count", "i32", 0, 0, wasm.i64, 0,
   "shift", "i32", 0, 0, 0, 0,
@@ -2479,7 +2463,6 @@ define_type(
 define_type(
   "VectorSeq", 0,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "arr", "i32", 0, 0, 0, 0,
   "arr_off", "i32", 0, 0, 0, 0,
@@ -2490,7 +2473,6 @@ define_type(
 define_type(
   "HashMapNodeSeq", 0,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "curr_seq", "i32", 0, 0, 0, 0,
   "nodes", "i32", 0, 0, 0, 0,
@@ -2500,7 +2482,6 @@ define_type(
 define_type(
   "HashMapSeq", 0,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "map", "i32", 0, 0, wasm.i32, 0,
   "root", "i32", 0, 0, 0, 0
@@ -2509,7 +2490,6 @@ define_type(
 define_type(
   "LazySeq", 0,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "generator", "i32", 0, 0, 0, 0,
   "seq", "i32", 0, 0, 0, 0,
@@ -2519,7 +2499,6 @@ define_type(
 define_type(
   "ConsSeq", 0,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "first", "i32", 0, 0, 0, 0,
   "rest", "i32", 0, 0, 0, 0
@@ -2528,7 +2507,6 @@ define_type(
 define_type(
   "ConcatSeq", 0,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "left", "i32", 0, 0, 0, 0,
   "right", "i32", 0, 0, 0, 0
@@ -2537,7 +2515,6 @@ define_type(
 define_type(
   "Seq", 1,
   "refs", "i32", 1, refs_default, 0, 0,
-  // "refs", "i32", 1, 0x80000000, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "root", "i32", 0, 0, 0, 0
 );
@@ -3068,13 +3045,17 @@ impl_free(types.Array, function (free_self) {
   const arr = [0],
         mem = this.local(wasm.i32),
         idx = this.local(wasm.i32),
-        len = this.local(wasm.i32);
+        len = this.local(wasm.i32),
+        org = this.local(wasm.i32);
   return [
     // if this is a subarray:
     wasm.local$get, ...arr,
     wasm.call, ...types.Array.fields.original.uleb128,
-    wasm.i32$eqz,
+    wasm.local$tee, ...org,
     wasm.if, wasm.void,
+      wasm.local$get, ...org,
+      wasm.call, ...free.uleb128,
+    wasm.else,
       wasm.local$get, ...arr,
       wasm.call, ...types.Array.fields.length.uleb128,
       wasm.i32$const, 2,
@@ -6668,8 +6649,6 @@ const symkw = function (which) {
           wasm.i32$const, 0,
         wasm.end,
         wasm.if, wasm.void,
-          // wasm.local$get, ...namespace,
-          // wasm.call, ...free.uleb128,
           wasm.local$get, ...name,
           wasm.call, ...free.uleb128,
           wasm.i32$const, ...sleb128i32(store),
@@ -8044,8 +8023,9 @@ const new_env = funcs.build(
 const free_env_leaf = funcs.build(
   [wasm.i32], [], {},
   function (val) {
+    const atom_val = this.local(wasm.i32);
     return [
-      wasm.local$get, ...val,
+      wasm.local$get, val,
       wasm.call, ...read_refs.uleb128,
       wasm.i32$const, 1,
       wasm.i32$eq,
@@ -8057,7 +8037,14 @@ const free_env_leaf = funcs.build(
         wasm.if, wasm.void,
           wasm.local$get, ...val,
           wasm.call, ...atom_deref.uleb128,
-          wasm.call, ...free.uleb128,
+          wasm.local$tee, ...atom_val,
+          wasm.call, ...read_refs.uleb128,
+          wasm.i32$const, 1,
+          wasm.i32$eq,
+          wasm.if, wasm.void,
+            wasm.local$get, ...atom_val,
+            wasm.call, ...free.uleb128,
+          wasm.end,
         wasm.end,
         wasm.local$get, ...val,
         wasm.call, ...free.uleb128,
@@ -9758,7 +9745,7 @@ const expand_form = new_method(1, wasm.i32,
 
 // todo: only return value if requested
 const compile_form = funcs.build(
-  [wasm.i32], [wasm.i32], {},
+  [wasm.i32], [], {},
   function (form) {
     const out = this.local(wasm.i32),
           func = this.local(wasm.i32),
@@ -9775,24 +9762,26 @@ wasm.local$set, ...a,
       //wasm.call, ...free.uleb128,
       wasm.call, ...start_func.uleb128,
       wasm.local$tee, ...func,
-      wasm.i32$const, ...sleb128i32(wasm.i32$const),
-      wasm.call, ...append_code.uleb128,
-      wasm.i32$const, 4,
-      wasm.call, ...alloc.uleb128,
-      wasm.local$tee, ...out,
-      wasm.call, ...append_varsint32.uleb128,
+      // wasm.i32$const, ...sleb128i32(wasm.i32$const),
+      // wasm.call, ...append_code.uleb128,
+      // wasm.i32$const, 4,
+      // wasm.call, ...alloc.uleb128,
+      // wasm.local$tee, ...out,
+      // wasm.call, ...append_varsint32.uleb128,
       wasm.i32$const, nil,
       wasm.call, ...new_env.uleb128,
       wasm.local$tee, ...env,
       wasm.call, ...emit_code.uleb128,
       wasm.drop,
       wasm.local$get, ...func,
-      wasm.i32$const, ...sleb128i32(wasm.i32$store),
+      wasm.i32$const, ...sleb128i32(wasm.drop),
       wasm.call, ...append_code.uleb128,
-      wasm.i32$const, 2,
-      wasm.call, ...append_varuint32.uleb128,
-      wasm.i32$const, 0,
-      wasm.call, ...append_varuint32.uleb128,
+      // wasm.i32$const, ...sleb128i32(wasm.i32$store),
+      // wasm.call, ...append_code.uleb128,
+      // wasm.i32$const, 2,
+      // wasm.call, ...append_varuint32.uleb128,
+      // wasm.i32$const, 0,
+      // wasm.call, ...append_varuint32.uleb128,
       wasm.call, ...end_func.uleb128,
       wasm.local$get, ...env,
       wasm.call, ...replace_global_references.uleb128,
@@ -9816,16 +9805,16 @@ wasm.local$set, ...a,
       wasm.end,
       wasm.local$get, ...env,
       wasm.call, ...free_env.uleb128,
-wasm.i32$const, ...sleb128i32(next_addr),
-wasm.i32$load, 2, 0,
-wasm.local$get, ...a,
-wasm.i32$sub,
-wasm.call, ...print_i32.uleb128,
-      wasm.local$get, ...out,
-      wasm.i32$load, 2, 0,
-      wasm.local$get, ...out,
-      wasm.i32$const, 4,
-      wasm.call, ...free_mem.uleb128,
+//wasm.i32$const, ...sleb128i32(next_addr),
+//wasm.i32$load, 2, 0,
+//wasm.local$get, ...a,
+//wasm.i32$sub,
+//wasm.call, ...print_i32.uleb128,
+      //wasm.local$get, ...out,
+      //wasm.i32$load, 2, 0,
+      //wasm.local$get, ...out,
+      //wasm.i32$const, 4,
+      //wasm.call, ...free_mem.uleb128,
     ];
   }
 );
@@ -10833,6 +10822,9 @@ const parse_string = funcs.build(
       wasm.else,
         wasm.local$get, ...segment,
       wasm.end,
+// wasm.local$tee, ...out,
+// wasm.local$get, ...out,
+// wasm.call, ...print_string.uleb128,
       wasm.local$get, ...idx,
       wasm.local$get, ...lineno
     ];
@@ -11063,7 +11055,7 @@ const eval_stream = funcs.build(
         wasm.local$tee, ...form,
         wasm.call, ...compile_form.uleb128,
 // todo: recursive?
-        wasm.call, ...free.uleb128,
+        //wasm.call, ...free.uleb128,
       wasm.end,
       wasm.local$get, ...idx,
       wasm.local$get, ...lineno
