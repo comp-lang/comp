@@ -2319,7 +2319,7 @@ define_type(
 );
 
 define_type(
-  "Symbol", 0,
+  "Symbol", 1,
   "refs", "i32", 1, refs_default, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "namespace", "i32", 0, 0, wasm.i32, 0,
@@ -2872,13 +2872,25 @@ const no_free = func => [];
 free.implement(types.Nil, no_free);
 free.implement(types.False, no_free);
 free.implement(types.True, no_free);
-free.implement(types.Symbol, no_free);
+//free.implement(types.Symbol, no_free);
 free.implement(types.Keyword, no_free);
 // todo: free these, but make sure global vars are protected
 free.implement(types.Method, no_free);
 free.implement(types.Type, no_free);
 free.implement(types.VariadicFunction, no_free);
 free.implement(types.Function, no_free);
+
+impl_free(types.Symbol, function (free_self) {
+  return [
+    wasm.local$get, 0,
+    wasm.call, ...types.Symbol.fields.namespace.uleb128,
+    wasm.call, ...free.uleb128,
+    wasm.local$get, 0,
+    wasm.call, ...types.Symbol.fields.name.uleb128,
+    wasm.call, ...free.uleb128,
+    ...free_self
+  ];
+});
 
 // no type-specific cleanup, just use default:
 impl_free(types.Int, (fm) => fm);
@@ -2907,7 +2919,7 @@ function no_inc_refs (val) {
 inc_refs.implement(types.Nil, no_inc_refs);
 inc_refs.implement(types.False, no_inc_refs);
 inc_refs.implement(types.True, no_inc_refs);
-inc_refs.implement(types.Symbol, no_inc_refs);
+// inc_refs.implement(types.Symbol, no_inc_refs);
 inc_refs.implement(types.Keyword, no_inc_refs);
 inc_refs.implement(types.Method, no_inc_refs);
 inc_refs.implement(types.Type, no_inc_refs);
@@ -5168,6 +5180,22 @@ const eq = funcs.build(
   }
 );
 
+equiv.implement(types.Symbol, function (a, b) {
+  return [
+    wasm.local$get, ...a,
+    wasm.call, ...types.Symbol.fields.namespace.uleb128,
+    wasm.local$get, ...b,
+    wasm.call, ...types.Symbol.fields.namespace.uleb128,
+    wasm.call, ...eq.uleb128,
+    wasm.local$get, ...a,
+    wasm.call, ...types.Symbol.fields.name.uleb128,
+    wasm.local$get, ...b,
+    wasm.call, ...types.Symbol.fields.name.uleb128,
+    wasm.call, ...eq.uleb128,
+    wasm.i32$and
+  ];
+});
+
 /*-------*\
 |         |
 | HashMap |
@@ -6414,27 +6442,6 @@ to_seq.implement(types.Vector, function (vec) {
   ];
 });
 
-const seq_append = funcs.build(
-  [wasm.i32, wasm.i32], [wasm.i32], {},
-  function (seq, val) {
-    const root = this.local(wasm.i32);
-    return [
-      wasm.local$get, ...seq,
-      wasm.call, ...types.Seq.fields.root.uleb128,
-      wasm.local$tee, ...root,
-      wasm.if, wasm.i32,
-        wasm.local$get, ...root,
-        wasm.call, ...types.VectorSeq.fields.vec.uleb128,
-      wasm.else,
-        wasm.i32$const, ...sleb128i32(empty_vector),
-      wasm.end,
-      wasm.local$get, ...val,
-      wasm.call, ...conj.uleb128,
-      wasm.call, ...to_seq.uleb128
-    ];
-  }
-);
-
 const vector_seq_from_array = funcs.build(
   [wasm.i32], [wasm.i32], {},
   function (arr) {
@@ -6683,7 +6690,7 @@ const symkw = function (which) {
 }
 
 const keyword = symkw("keyword"),
-      symbol = symkw("symbol"),
+      // symbol = symkw("symbol"),
       keywords = {},
       symbols = {};
 
@@ -6697,7 +6704,25 @@ function make_symkw (which) {
   }
 }
 
-const make_symbol = make_symkw("symbol");
+const symbol = funcs.build(
+  [wasm.i32, wasm.i32], [wasm.i32], {},
+  function (ns, nm) {
+    return [
+      wasm.local$get, ...ns,
+      wasm.call, ...inc_refs.uleb128,
+      wasm.local$get, ...nm,
+      wasm.call, ...inc_refs.uleb128,
+      wasm.call, ...types.Symbol.constr.uleb128
+    ];
+  }
+);
+
+const make_symbol = function (nm) {
+  if (typeof nm === "string") nm = cached_string(nm);
+  return comp.Symbol(0, nm);
+}
+
+// const make_symbol = make_symkw("symbol");
 const make_keyword = make_symkw("keyword");
 
 compile();
@@ -7570,6 +7595,7 @@ const add_global_reference = funcs.build(
       wasm.call, ...free.uleb128,
       wasm.local$tee, ...arr,
       wasm.local$get, ...sym,
+      wasm.call, ...inc_refs.uleb128,
       wasm.call, ...array_push_i32.uleb128,
       wasm.local$get, ...arr,
       wasm.call, ...free.uleb128,
@@ -8225,6 +8251,7 @@ const comp_func_set_params = funcs.build(
             wasm.local$get, ...env,
             wasm.local$get, ...env,
             wasm.local$get, ...curr_param,
+            wasm.call, ...inc_refs.uleb128,
             wasm.local$get, ...param_index,
             wasm.i64$extend_i32_u,
             wasm.call, ...types.Int.constr.uleb128,
@@ -8317,6 +8344,7 @@ const comp_func_add_local = funcs.build(
       wasm.drop,
       wasm.local$get, ...env,
       wasm.local$get, ...bdg,
+      wasm.call, ...inc_refs.uleb128,
       wasm.local$get, ...local_idx,
       wasm.i64$extend_i32_u,
       wasm.call, ...types.Int.constr.uleb128,
@@ -9718,9 +9746,7 @@ emit_code.implement(types.Seq, function (list, func, env) {
       wasm.local$set, ...result,
     wasm.end,
     //wasm.local$get, ...list,
-    //wasm.call, ...free_recursive.uleb128,
-    wasm.local$get, ...list,
-    wasm.call, ...free.uleb128,
+    //wasm.call, ...free.uleb128,
     wasm.local$get, ...result,
   ];
 });
@@ -9757,7 +9783,7 @@ wasm.i32$const, ...sleb128i32(next_addr),
 wasm.i32$load, 2, 0,
 wasm.local$set, ...a,
       wasm.local$get, ...form,
-      wasm.call, ...expand_form.uleb128,
+      //wasm.call, ...expand_form.uleb128,
       //wasm.local$get, ...form,
       //wasm.call, ...free.uleb128,
       wasm.call, ...start_func.uleb128,
@@ -9805,11 +9831,13 @@ wasm.local$set, ...a,
       wasm.end,
       wasm.local$get, ...env,
       wasm.call, ...free_env.uleb128,
-//wasm.i32$const, ...sleb128i32(next_addr),
-//wasm.i32$load, 2, 0,
-//wasm.local$get, ...a,
-//wasm.i32$sub,
-//wasm.call, ...print_i32.uleb128,
+      wasm.local$get, ...form,
+      wasm.call, ...free.uleb128,
+wasm.i32$const, ...sleb128i32(next_addr),
+wasm.i32$load, 2, 0,
+wasm.local$get, ...a,
+wasm.i32$sub,
+wasm.call, ...print_i32.uleb128,
       //wasm.local$get, ...out,
       //wasm.i32$load, 2, 0,
       //wasm.local$get, ...out,
@@ -10523,6 +10551,10 @@ const parse_symbol = funcs.build(
           wasm.local$get, ...ns,
           wasm.local$get, ...nm,
           wasm.call, ...symbol.uleb128,
+          wasm.local$get, ...ns,
+          wasm.call, ...free.uleb128,
+          wasm.local$get, ...nm,
+          wasm.call, ...free.uleb128,
         wasm.end,
       wasm.end,
       wasm.local$get, ...idx,
@@ -10535,9 +10567,10 @@ const parse_coll = funcs.build(
   [wasm.i32, wasm.i32, wasm.i32, wasm.i32],
   [wasm.i32, wasm.i32, wasm.i32], {},
   function (str, idx, lineno, delim) {
-    const coll = this.local(wasm.i32);
+    const coll = this.local(wasm.i32),
+          val = this.local(wasm.i32);
     return [
-      wasm.i32$const, ...sleb128i32(empty_seq),
+      wasm.i32$const, ...sleb128i32(empty_vector),
       wasm.local$set, ...coll,
       wasm.local$get, ...idx,
       wasm.i32$const, 1,
@@ -10558,10 +10591,13 @@ const parse_coll = funcs.build(
           wasm.call, ...read_form.uleb128,
           wasm.local$set, ...lineno,
           wasm.local$set, ...idx,
-          wasm.call, ...seq_append.uleb128,
+          wasm.local$tee, ...val,
+          wasm.call, ...conj.uleb128,
           wasm.local$get, ...coll,
           wasm.call, ...free.uleb128,
           wasm.local$set, ...coll,
+          wasm.local$get, ...val,
+          wasm.call, ...free.uleb128,
           wasm.br, 1,
         wasm.end,
       wasm.end,
@@ -10583,7 +10619,12 @@ const parse_list = funcs.build(
       wasm.local$get, ...idx,
       wasm.local$get, ...lineno,
       wasm.i32$const, ...sleb128i32(")".codePointAt(0)),
-      wasm.call, ...parse_coll.uleb128
+      wasm.call, ...parse_coll.uleb128,
+      wasm.local$set, ...lineno,
+      wasm.local$set, ...idx,
+      wasm.call, ...to_seq.uleb128,
+      wasm.local$get, ...idx,
+      wasm.local$get, ...lineno
     ];
   }
 );
@@ -10600,22 +10641,6 @@ const parse_vector = funcs.build(
       wasm.local$get, ...lineno,
       wasm.i32$const, ...sleb128i32("]".codePointAt(0)),
       wasm.call, ...parse_coll.uleb128,
-      wasm.local$set, ...lineno,
-      wasm.local$set, ...idx,
-      wasm.local$tee, ...seq,
-      wasm.call, ...types.Seq.fields.root.uleb128,
-      wasm.local$tee, ...vec,
-      wasm.if, wasm.i32,
-        wasm.local$get, ...vec,
-        wasm.call, ...types.VectorSeq.fields.vec.uleb128,
-        wasm.call, ...inc_refs.uleb128,
-      wasm.else,
-        wasm.i32$const, ...sleb128i32(empty_vector),
-      wasm.end,
-      wasm.local$get, ...seq,
-      wasm.call, ...free.uleb128,
-      wasm.local$get, ...idx,
-      wasm.local$get, ...lineno
     ];
   }
 );

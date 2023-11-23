@@ -2,6 +2,12 @@
 ;; expand tagged numbers to (Int$value) and (Float$value)
 ;; check vector/map for nested runtime ops, change to forms
 
+(cons :a ())
+(cons :a ())
+(cons :a ())
+(cons :a ())
+(cons :a ())
+
 (defmethod 'invoke 2 nil)
 
 (impl invoke VariadicFunction
@@ -243,25 +249,25 @@
 
 (compile)
 
-(call-mtd reset! macros
-  (assoc (call-mtd deref macros) 'defmacro
-    (fn _ [args]
-      (let [nm (first args)
-            fn (first (rest args))]
-       `(do (compile)
-          (call-mtd reset! macros
-            (assoc (call-mtd deref macros) ~nm ~fn)))))))
+;(call-mtd reset! macros
+;  (assoc (call-mtd deref macros) 'defmacro
+;    (fn _ [args]
+;      (let [nm (first args)
+;            fn (first (rest args))]
+;       `(do (compile)
+;          (call-mtd reset! macros
+;            (assoc (call-mtd deref macros) ~nm ~fn)))))))
+;
+;(compile)
 
-(compile)
+;(defmacro 'or
+;  (fn _ [args]
+;   `(let [x# ~(first args)]
+;      (if x# x#
+;       ~(first (rest args))))))
 
-(defmacro 'or
-  (fn _ [args]
-   `(let [x# ~(first args)]
-      (if x# x#
-       ~(first (rest args))))))
-
-(pr `x#)
-(pr `(1 2 3))
+;(pr `x#)
+;(pr `(1 2 3))
 (pr (string-length "abc"))
 (pr (substring "abcd" 1 3))
 (pr (index-of-codepoint "abcd" 99))
@@ -273,13 +279,13 @@
 (pr [1 2 3])
 (pr '(1 2 3))
 (pr (map inc [1 2 3]))
-(pr (or 17 "this should not print"))
-(pr (or nil "this should print"))
+;(pr (or 17 "this should not print"))
+;(pr (or nil "this should print"))
 
-(impl expand-form Symbol
-  (fn _ [s]
-    (let [s* (get (call-mtd deref aliases) s nil)]
-      (if s*
-        s*
-        (throw s
-          (concat-str "symbol not found: " (call-mtd to-str s)))))))
+;(impl expand-form Symbol
+;  (fn _ [s]
+;    (let [s* (get (call-mtd deref aliases) s nil)]
+;      (if s*
+;        s*
+;        (throw s
+;          (concat-str "symbol not found: " (call-mtd to-str s)))))))
