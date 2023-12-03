@@ -145,6 +145,8 @@
         (cons
           (cons 'cons
             (cons
+;; todo: this should only happen the first time
+;; break rest into separate function
               (let [head (first form)]
                 (if
                   (if (Seq$instance head)
@@ -249,16 +251,16 @@
 
 (compile)
 
-;(call-mtd reset! macros
-;  (assoc (call-mtd deref macros) 'defmacro
-;    (fn _ [args]
-;      (let [nm (first args)
-;            fn (first (rest args))]
-;       `(do (compile)
-;          (call-mtd reset! macros
-;            (assoc (call-mtd deref macros) ~nm ~fn)))))))
-;
-;(compile)
+(call-mtd reset! macros
+  (assoc (call-mtd deref macros) 'defmacro
+    (fn _ [args]
+      (let [nm (first args)
+            fn (first (rest args))]
+       `(do (compile)
+          (call-mtd reset! macros
+            (assoc (call-mtd deref macros) ~nm ~fn)))))))
+
+(compile)
 
 ;(defmacro 'or
 ;  (fn _ [args]
@@ -266,8 +268,8 @@
 ;      (if x# x#
 ;       ~(first (rest args))))))
 
-;(pr `x#)
-;(pr `(1 2 3))
+(pr `x#)
+(pr `(1 (2 3)))
 (pr (string-length "abc"))
 (pr (substring "abcd" 1 3))
 (pr (index-of-codepoint "abcd" 99))

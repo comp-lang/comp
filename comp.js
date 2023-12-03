@@ -6398,9 +6398,12 @@ to_seq.implement(types.Vector, function (vec) {
         arr = this.local(wasm.i32);
   return [
     wasm.local$get, ...vec,
-    wasm.call, ...types.Vector.fields.count.uleb128,
+    wasm.call, ...count.uleb128,
     wasm.local$tee, ...cnt,
     wasm.if, wasm.i32,
+      wasm.local$get, ...vec,
+      wasm.call, ...inc_refs.uleb128,
+      wasm.drop,
       wasm.local$get, ...cnt,
       wasm.i32$const, 32,
       wasm.i32$le_u,
@@ -6705,7 +6708,7 @@ function make_symkw (which) {
 }
 
 const symbol = funcs.build(
-  [wasm.i32, wasm.i32], [wasm.i32], {},
+  [wasm.i32, wasm.i32], [wasm.i32], { comp: "symbol" },
   function (ns, nm) {
     return [
       wasm.local$get, ...ns,
@@ -7502,6 +7505,31 @@ funcs.build(
   function (val) {
     return [
       wasm.local$get, ...val,
+      wasm.call, ...print_i32.uleb128,
+      wasm.i32$const, nil
+    ];
+  }
+);
+
+funcs.build(
+  [wasm.i32], [wasm.i32], { comp: "print-mtd-func-num" },
+  function (mtd) {
+    return [
+      wasm.local$get, ...mtd,
+      wasm.call, ...types.Method.fields.main_func.uleb128,
+      wasm.call, ...types.Function.fields.func_num.uleb128,
+      wasm.call, ...print_i32.uleb128,
+      wasm.i32$const, nil
+    ];
+  }
+);
+
+funcs.build(
+  [wasm.i32], [wasm.i32], { comp: "print-func-num" },
+  function (func) {
+    return [
+      wasm.local$get, ...func,
+      wasm.call, ...types.Function.fields.func_num.uleb128,
       wasm.call, ...print_i32.uleb128,
       wasm.i32$const, nil
     ];
@@ -8470,6 +8498,7 @@ def_special_form("call-mtd", function (fn, args, env) {
     wasm.call, ...first.uleb128,
     wasm.local$get, ...args,
     wasm.call, ...rest.uleb128,
+    //wasm.call, ...inc_refs.uleb128,
     wasm.i32$const, 1,
     wasm.call, ...emit_func_call.uleb128
   ];
@@ -8507,7 +8536,7 @@ def_special_form("let", function (func, forms, env) {
     wasm.local$get, ...forms,
     wasm.call, ...first.uleb128,
     wasm.local$tee, ...bdgs,
-    wasm.call, ...types.Vector.fields.count.uleb128,
+    wasm.call, ...count.uleb128,
     wasm.local$tee, ...bdgs_cnt,
     wasm.if, wasm.void,
       wasm.local$get, ...env,
@@ -9783,7 +9812,8 @@ wasm.i32$const, ...sleb128i32(next_addr),
 wasm.i32$load, 2, 0,
 wasm.local$set, ...a,
       wasm.local$get, ...form,
-      //wasm.call, ...expand_form.uleb128,
+      wasm.call, ...expand_form.uleb128,
+      wasm.local$tee, ...new_form,
       //wasm.local$get, ...form,
       //wasm.call, ...free.uleb128,
       wasm.call, ...start_func.uleb128,
@@ -9831,6 +9861,13 @@ wasm.local$set, ...a,
       wasm.end,
       wasm.local$get, ...env,
       wasm.call, ...free_env.uleb128,
+      //wasm.local$get, ...new_form,
+      //wasm.local$get, ...form,
+      //wasm.i32$ne,
+      //wasm.if, wasm.void,
+      //  wasm.local$get, ...new_form,
+      //  wasm.call, ...free.uleb128,
+      //wasm.end,
       wasm.local$get, ...form,
       wasm.call, ...free.uleb128,
 wasm.i32$const, ...sleb128i32(next_addr),
@@ -10702,28 +10739,18 @@ const parse_map = funcs.build(
   }
 );
 
-const quote_form = funcs.build(
-  [wasm.i32, wasm.i32], [wasm.i32], {},
-  function (form, sym) {
-    return [
-      wasm.i32$const, 2,
-      wasm.call, ...refs_array_by_length.uleb128,
-      wasm.i32$const, 0,
-      wasm.local$get, ...sym,
-      wasm.call, ...refs_array_set.uleb128,
-      wasm.i32$const, 1,
-      wasm.local$get, ...form,
-      wasm.call, ...refs_array_set.uleb128,
-      wasm.call, ...vector_seq_from_array.uleb128,
-    ];
-  }
-);
-
 const parse_quote = funcs.build(
   [wasm.i32, wasm.i32, wasm.i32, wasm.i32],
   [wasm.i32, wasm.i32, wasm.i32], {},
   function (str, idx, lineno, sym) {
     return [
+      wasm.i32$const, 2,
+      wasm.call, ...refs_array_by_length.uleb128,
+      wasm.i32$const, 0,
+      wasm.local$get, ...sym,
+      wasm.call, ...inc_refs.uleb128,
+      wasm.call, ...refs_array_set.uleb128,
+      wasm.i32$const, 1,
       wasm.local$get, ...str,
       wasm.local$get, ...idx,
       wasm.i32$const, 1,
@@ -10732,8 +10759,8 @@ const parse_quote = funcs.build(
       wasm.call, ...read_form.uleb128,
       wasm.local$set, ...lineno,
       wasm.local$set, ...idx,
-      wasm.local$get, ...sym,
-      wasm.call, ...quote_form.uleb128,
+      wasm.call, ...refs_array_set.uleb128,
+      wasm.call, ...vector_seq_from_array.uleb128,
       wasm.local$get, ...idx,
       wasm.local$get, ...lineno
     ];
