@@ -6401,6 +6401,7 @@ to_seq.implement(types.Vector, function (vec) {
     wasm.call, ...count.uleb128,
     wasm.local$tee, ...cnt,
     wasm.if, wasm.i32,
+// todo: this needs to be freed:
       wasm.local$get, ...vec,
       wasm.call, ...inc_refs.uleb128,
       wasm.drop,
@@ -7505,6 +7506,18 @@ funcs.build(
   function (val) {
     return [
       wasm.local$get, ...val,
+      wasm.call, ...print_i32.uleb128,
+      wasm.i32$const, nil
+    ];
+  }
+);
+
+funcs.build(
+  [wasm.i32], [wasm.i32], { comp: "print-type" },
+  function (val) {
+    return [
+      wasm.local$get, ...val,
+      wasm.i32$load, 2, 0,
       wasm.call, ...print_i32.uleb128,
       wasm.i32$const, nil
     ];
@@ -9861,13 +9874,13 @@ wasm.local$set, ...a,
       wasm.end,
       wasm.local$get, ...env,
       wasm.call, ...free_env.uleb128,
-      //wasm.local$get, ...new_form,
-      //wasm.local$get, ...form,
-      //wasm.i32$ne,
-      //wasm.if, wasm.void,
-      //  wasm.local$get, ...new_form,
-      //  wasm.call, ...free.uleb128,
-      //wasm.end,
+      wasm.local$get, ...new_form,
+      wasm.local$get, ...form,
+      wasm.i32$ne,
+      wasm.if, wasm.void,
+        wasm.local$get, ...new_form,
+        wasm.call, ...free.uleb128,
+      wasm.end,
       wasm.local$get, ...form,
       wasm.call, ...free.uleb128,
 wasm.i32$const, ...sleb128i32(next_addr),
@@ -10633,8 +10646,9 @@ const parse_coll = funcs.build(
           wasm.local$get, ...coll,
           wasm.call, ...free.uleb128,
           wasm.local$set, ...coll,
-          wasm.local$get, ...val,
-          wasm.call, ...free.uleb128,
+// todo: this needs to be freed:
+          //wasm.local$get, ...val,
+          //wasm.call, ...free.uleb128,
           wasm.br, 1,
         wasm.end,
       wasm.end,

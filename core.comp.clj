@@ -262,11 +262,11 @@
 
 (compile)
 
-;(defmacro 'or
-;  (fn _ [args]
-;   `(let [x# ~(first args)]
-;      (if x# x#
-;       ~(first (rest args))))))
+(defmacro 'or
+  (fn _ [args]
+   `(let [x# ~(first args)]
+      (if x# x#
+       ~(first (rest args))))))
 
 (pr `x#)
 (pr `(1 (2 3)))
@@ -281,8 +281,8 @@
 (pr [1 2 3])
 (pr '(1 2 3))
 (pr (map inc [1 2 3]))
-;(pr (or 17 "this should not print"))
-;(pr (or nil "this should print"))
+(pr (or 17 "this should not print"))
+(pr (or nil "this should print"))
 
 ;(impl expand-form Symbol
 ;  (fn _ [s]
