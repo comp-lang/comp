@@ -846,6 +846,11 @@ function import_func (
   return Object.assign(func, spec);
 }
 
+const print_func_num = import_func(
+  0, 0, 0, [],
+  function () { console.log(func_num); }
+);
+
 const get_type_idx = import_func(
   4, 0, 0, [wasm.i32],
   function (
@@ -2516,7 +2521,7 @@ define_type(
   "Seq", 1,
   "refs", "i32", 1, refs_default, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
-  "root", "i32", 0, 0, 0, 0
+  "root", "i32", 0, 0, wasm.i32, 0
 );
 
 /*-----*\
@@ -2897,7 +2902,7 @@ impl_free(types.Int, (fm) => fm);
 impl_free(types.Float, (fm) => fm);
 
 const inc_refs = pre_new_method(1, 0, 0, wasm.i32,
-  { export: "inc_refs" },
+  { export: "inc_refs", comp: "inc-refs" },
   function (val) {
     return [
       wasm.local$get, ...val,
@@ -6401,7 +6406,6 @@ to_seq.implement(types.Vector, function (vec) {
     wasm.call, ...count.uleb128,
     wasm.local$tee, ...cnt,
     wasm.if, wasm.i32,
-// todo: this needs to be freed:
       wasm.local$get, ...vec,
       wasm.call, ...inc_refs.uleb128,
       wasm.drop,
@@ -7513,6 +7517,16 @@ funcs.build(
 );
 
 funcs.build(
+  [], [wasm.i32], { comp: "print-curr-func-num" },
+  function () {
+    return [
+      wasm.call, ...print_func_num.uleb128,
+      wasm.i32$const, nil
+    ];
+  }
+);
+
+funcs.build(
   [wasm.i32], [wasm.i32], { comp: "print-type" },
   function (val) {
     return [
@@ -7597,8 +7611,9 @@ const emit_code_default = funcs.build(
     return [
       wasm.local$get, ...val,
       wasm.call, ...inc_refs.uleb128,
-      wasm.i32$const, 1,
-      wasm.call, ...set_local_refs2.uleb128,
+// todo: needed?
+      //wasm.i32$const, 1,
+      //wasm.call, ...set_local_refs2.uleb128,
       wasm.drop,
       wasm.local$get, ...func,
       wasm.i32$const, ...sleb128i32(wasm.i32$const),
@@ -9787,6 +9802,28 @@ emit_code.implement(types.Seq, function (list, func, env) {
       wasm.i32$const, 2,
       wasm.local$set, ...result,
     wasm.end,
+    //wasm.loop, wasm.void,
+    //  wasm.i32$const, 0,
+    //  wasm.local$set, ...args_list,
+    //  wasm.local$get, ...list,
+    //  wasm.call, ...count.uleb128,
+    //  wasm.if, wasm.void,
+    //    wasm.local$get, ...list,
+    //    wasm.call, ...first.uleb128,
+    //    wasm.call, ...free.uleb128,
+    //    wasm.local$get, ...list,
+    //    wasm.call, ...rest.uleb128,
+    //    wasm.local$get, ...args_list,
+    //    wasm.if, wasm.void,
+    //      wasm.i32$const, 1,
+    //      wasm.local$set, ...args_list,
+    //      wasm.local$get, ...list,
+    //      wasm.call, ...free.uleb128,
+    //    wasm.end,
+    //    wasm.local$set, ...list,
+    //    wasm.br, 1,
+    //  wasm.end,
+    //wasm.end,
     //wasm.local$get, ...list,
     //wasm.call, ...free.uleb128,
     wasm.local$get, ...result,
@@ -10646,9 +10683,8 @@ const parse_coll = funcs.build(
           wasm.local$get, ...coll,
           wasm.call, ...free.uleb128,
           wasm.local$set, ...coll,
-// todo: this needs to be freed:
-          //wasm.local$get, ...val,
-          //wasm.call, ...free.uleb128,
+          wasm.local$get, ...val,
+          wasm.call, ...free.uleb128,
           wasm.br, 1,
         wasm.end,
       wasm.end,
@@ -10665,6 +10701,7 @@ const parse_list = funcs.build(
   [wasm.i32, wasm.i32, wasm.i32],
   [wasm.i32, wasm.i32, wasm.i32], {},
   function (str, idx, lineno) {
+    const vec = this.local(wasm.i32);
     return [
       wasm.local$get, ...str,
       wasm.local$get, ...idx,
@@ -10673,7 +10710,10 @@ const parse_list = funcs.build(
       wasm.call, ...parse_coll.uleb128,
       wasm.local$set, ...lineno,
       wasm.local$set, ...idx,
+      wasm.local$tee, ...vec,
       wasm.call, ...to_seq.uleb128,
+      wasm.local$get, ...vec,
+      wasm.call, ...free.uleb128,
       wasm.local$get, ...idx,
       wasm.local$get, ...lineno
     ];

@@ -8,6 +8,14 @@
 (cons :a ())
 (cons :a ())
 
+(defmethod 'to-str 1 nil)
+
+(defmethod 'pr-str 1 to-str)
+
+(def 'pr
+  (fn _ [x]
+    (js/console.log (call-mtd pr-str x))))
+
 (defmethod 'invoke 2 nil)
 
 (impl invoke VariadicFunction
@@ -21,14 +29,6 @@
 (impl invoke Method
   (fn _ [m arg]
     (call-mtd m arg)))
-
-(defmethod 'to-str 1 nil)
-
-(defmethod 'pr-str 1 to-str)
-
-(def 'pr
-  (fn _ [x]
-    (js/console.log (call-mtd pr-str x))))
 
 (def 'map
   (fn map [f coll]
@@ -147,7 +147,7 @@
             (cons
 ;; todo: this should only happen the first time
 ;; break rest into separate function
-              (let [head (first form)]
+              (let [head (inc-refs (first form))]
                 (if
                   (if (Seq$instance head)
                     (eq (first head) 'unquote)
@@ -155,7 +155,7 @@
                   (first (rest head))
                   (call-mtd syntax-quote head)))
               (cons () ())))
-          (cons (f (rest form)) ())))
+          (do  (cons (f (rest form)) ()))))
       ())))
 
 (impl syntax-quote Vector
@@ -231,7 +231,7 @@
 (impl expand-form Seq
   (fn _ [form]
     (if (Int$value (count form))
-      (let [head (call-mtd expand-form (first form))
+      (let [head (inc-refs (call-mtd expand-form (first form)))
             tail (rest form)
             special
               (if (Symbol$instance head)
@@ -242,7 +242,7 @@
                         (call-mtd expand-form form)))
                   (let [macro (get (call-mtd deref macros) head nil)]
                     (if macro
-                      (call-mtd expand-form (macro tail))
+                      (call-mtd expand-form (macro (inc-refs tail)))
                       nil)))
                 nil)]
         (if special special
