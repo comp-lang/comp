@@ -1673,6 +1673,7 @@ let curr_addr = max_inst_size;
 
 const comp_false = curr_addr += 4,
       comp_true = curr_addr += 4;
+      //expanding_forms = curr_addr += 4;
 
 end_package();
 
@@ -6077,7 +6078,9 @@ rest.implement(types.ConsSeq, function (seq) {
   return [
     wasm.local$get, ...seq,
     wasm.call, ...types.ConsSeq.fields.rest.uleb128,
-    wasm.call, ...inc_refs.uleb128
+    wasm.call, ...types.Seq.fields.root.uleb128,
+    wasm.call, ...inc_refs.uleb128,
+    wasm.call, ...types.Seq.constr.uleb128
   ];
 });
 
@@ -7506,11 +7509,48 @@ funcs.build(
 );
 
 funcs.build(
+  [wasm.i32], [wasm.i32], { comp: "free" },
+  function (val) {
+    return [
+      wasm.local$get, ...val,
+      wasm.call, ...free.uleb128,
+      wasm.i32$const, nil
+    ];
+  }
+);
+
+funcs.build(
   [wasm.i32], [wasm.i32], { comp: "print-i32" },
   function (val) {
     return [
       wasm.local$get, ...val,
       wasm.call, ...print_i32.uleb128,
+      wasm.i32$const, nil
+    ];
+  }
+);
+
+funcs.build(
+  [wasm.i32], [wasm.i32], { comp: "print-refs" },
+  function (val) {
+    return [
+      wasm.local$get, ...val,
+      wasm.call, ...read_refs.uleb128,
+      wasm.call, ...print_i32.uleb128,
+      wasm.i32$const, nil
+    ];
+  }
+);
+
+funcs.build(
+  [wasm.i32], [wasm.i32], { comp: "inc-vector-seq-refs" },
+  function (val) {
+    return [
+      wasm.local$get, ...val,
+      wasm.call, ...types.Seq.fields.root.uleb128,
+      wasm.call, ...types.VectorSeq.fields.vec.uleb128,
+      wasm.call, ...inc_refs.uleb128,
+	    wasm.drop,
       wasm.i32$const, nil
     ];
   }
@@ -9842,6 +9882,18 @@ const expand_form = new_method(1, wasm.i32,
   ]
 );
 
+//funcs.build(
+//  [], [wasm.i32], { comp: "expanding-forms" },
+//  function () {
+//    return [
+//      wasm.i32$const, ...sleb128i32(expanding_forms),
+//      wasm.i32$const, 1,
+//      wasm.i32$store, 2, 0,
+//      wasm.i32$const, ...sleb128i32(nil)
+//    ];
+//  }
+//);
+
 /*------------*\
 |              |
 | compile-form |
@@ -9917,14 +9969,19 @@ wasm.local$set, ...a,
       wasm.if, wasm.void,
         wasm.local$get, ...new_form,
         wasm.call, ...free.uleb128,
+//wasm.local$get, ...form,
+//wasm.call, ...types.Seq.fields.root.uleb128,
+//wasm.call, ...types.VectorSeq.fields.vec.uleb128,
+//wasm.call, ...read_refs.uleb128,
+//wasm.call, ...print_i32.uleb128,
       wasm.end,
       wasm.local$get, ...form,
       wasm.call, ...free.uleb128,
-wasm.i32$const, ...sleb128i32(next_addr),
-wasm.i32$load, 2, 0,
-wasm.local$get, ...a,
-wasm.i32$sub,
-wasm.call, ...print_i32.uleb128,
+//wasm.i32$const, ...sleb128i32(next_addr),
+//wasm.i32$load, 2, 0,
+//wasm.local$get, ...a,
+//wasm.i32$sub,
+//wasm.call, ...print_i32.uleb128,
       //wasm.local$get, ...out,
       //wasm.i32$load, 2, 0,
       //wasm.local$get, ...out,
@@ -10683,8 +10740,13 @@ const parse_coll = funcs.build(
           wasm.local$get, ...coll,
           wasm.call, ...free.uleb128,
           wasm.local$set, ...coll,
-          wasm.local$get, ...val,
-          wasm.call, ...free.uleb128,
+          //wasm.i32$const, ...sleb128i32(expanding_forms),
+          //wasm.i32$load, 2, 0,
+          //wasm.i32$eqz,
+          //wasm.if, wasm.void,
+            wasm.local$get, ...val,
+            wasm.call, ...free.uleb128,
+          //wasm.end,
           wasm.br, 1,
         wasm.end,
       wasm.end,
@@ -10712,8 +10774,13 @@ const parse_list = funcs.build(
       wasm.local$set, ...idx,
       wasm.local$tee, ...vec,
       wasm.call, ...to_seq.uleb128,
-      wasm.local$get, ...vec,
-      wasm.call, ...free.uleb128,
+      //wasm.i32$const, ...sleb128i32(expanding_forms),
+      //wasm.i32$load, 2, 0,
+      //wasm.i32$eqz,
+      //wasm.if, wasm.void,
+        wasm.local$get, ...vec,
+        wasm.call, ...free.uleb128,
+      //wasm.end,
       wasm.local$get, ...idx,
       wasm.local$get, ...lineno
     ];

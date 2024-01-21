@@ -147,15 +147,15 @@
             (cons
 ;; todo: this should only happen the first time
 ;; break rest into separate function
-              (let [head (inc-refs (first form))]
+              (let [head (first form)]
                 (if
                   (if (Seq$instance head)
                     (eq (first head) 'unquote)
                     false)
                   (first (rest head))
-                  (call-mtd syntax-quote head)))
+                  (call-mtd syntax-quote (inc-refs head))))
               (cons () ())))
-          (do  (cons (f (rest form)) ()))))
+          (do (cons (f (rest form)) ()))))
       ())))
 
 (impl syntax-quote Vector
@@ -218,8 +218,8 @@
                      (substring-until nm 0 (- (String$length nm) 1))
                      "__gensym__")
                    (to-str (call-mtd deref gensym-counter)))
-                 nm)
-               nm)]
+                 (inc-refs nm))
+               (inc-refs nm))]
       (cons 'symbol
         (cons ns
           (cons nm ()))))))
@@ -231,7 +231,7 @@
 (impl expand-form Seq
   (fn _ [form]
     (if (Int$value (count form))
-      (let [head (inc-refs (call-mtd expand-form (first form)))
+      (let [head (call-mtd expand-form (first form))
             tail (rest form)
             special
               (if (Symbol$instance head)
@@ -242,11 +242,12 @@
                         (call-mtd expand-form form)))
                   (let [macro (get (call-mtd deref macros) head nil)]
                     (if macro
-                      (call-mtd expand-form (macro (inc-refs tail)))
+                      (do (inc-vector-seq-refs form)
+                          (call-mtd expand-form (macro tail)))
                       nil)))
                 nil)]
         (if special special
-          (cons head (map expand-form tail))))
+          (cons (inc-refs head) (map expand-form tail))))
       form)))
 
 (compile)
@@ -269,6 +270,7 @@
        ~(first (rest args))))))
 
 (pr `x#)
+(pr `(a))
 (pr `(1 (2 3)))
 (pr (string-length "abc"))
 (pr (substring "abcd" 1 3))
@@ -276,7 +278,6 @@
 (pr (hash "abc"))
 (pr (eq 1 2))
 (pr (Method$instance deref))
-(pr :a)
 (pr (concat-str "a" "b"))
 (pr [1 2 3])
 (pr '(1 2 3))
