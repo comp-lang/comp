@@ -26,7 +26,15 @@
 // todo: don't convert file to string - just read bytes
 // todo: free-recursive for collections
 
-(function init (module_code, module_len, module_off, start_funcs_len, mem_len) {
+(function init (
+  ref_table,
+  next_ref_address,
+  module_code,
+  module_len,
+  module_off,
+  start_funcs_len,
+  mem_len
+) {
   const is_browser = this === this.window;
   if (is_browser) {
   
@@ -57,17 +65,36 @@
       return new workers.Worker(pkg, { eval: true });
     }
     if (workers.isMainThread) {
-      build_comp(new_worker, init, {
-        is_browser: false,
-        is_main: true
-      }, argv, global, module_code, module_len, module_off, start_funcs_len, mem_len);
+      build_comp(
+        new_worker,
+        init,
+        { is_browser: false, is_main: true },
+        argv,
+        global,
+        ref_table,
+        next_ref_address,
+        module_code,
+        module_len,
+        module_off,
+        start_funcs_len,
+        mem_len
+      );
     } else {
       workers.parentPort.on("message", function (env) {
-        build_comp(new_worker, init, env, argv, global, module_code);
+        build_comp(
+          new_worker,
+          init,
+          env,
+          argv,
+          global,
+          ref_table,
+          next_ref_address,
+          module_code
+	);
       });
     }
   }
-}).call(this);
+}).call(this, [null]);
 
 function build_comp (
   new_worker,
@@ -75,6 +102,8 @@ function build_comp (
   main_env,
   argv,
   js_imports,
+  ref_table,
+  next_ref_address,
   module_code,
   module_len,
   module_off,
@@ -959,9 +988,9 @@ begin_package();
 \*---------*/
 
 // todo: why can't we return 0 as an index?
-const ref_table = [null];
+// const ref_table = [null];
 
-let next_ref_address = 0;
+// let next_ref_address = 0;
 
 const store_ref = import_func(
   1, 0, 0, [wasm.i32],
@@ -1531,6 +1560,8 @@ let next_addr;
 function build_package () {
   let func_code = slice_source(build_comp.toString());
   func_code += `(${init.toString()}).call(this,`;
+// todo: make sure only JSON friendly data is in ref_table
+  func_code += `${JSON.stringify(ref_table)},${next_ref_address},`;
   const last_addr = new DataView(memory.buffer).getUint32(next_addr, true);
   module_sections[data_section] = new Uint8Array(memory.buffer, 0, last_addr);
   let module_b64, off;
