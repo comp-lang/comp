@@ -72,7 +72,6 @@
           (concat-str "/" nm))
         nm))))
 
-
 (impl to-str Keyword
   (fn _ {:params [sym]}
     (let [ns (Keyword$namespace sym)
@@ -85,7 +84,7 @@
 
 (impl to-str Vector
   (fn _ {:params [vec]}
-    (let [n (Int$value (Vector$count vec))]
+    (let [n (Int$value (count vec))]
       (if n
         (let [i (Int$value 0)
               s (atom "[")]
@@ -102,7 +101,7 @@
 
 (impl to-str HashMap
   (fn _ {:params [m]}
-    (if (Int$value (HashMap$count m))
+    (if (Int$value (count m))
       (let [m (atom (to-seq m))
             s (atom "{")]
         (loop [m s]
@@ -149,7 +148,7 @@
             (cons
 ;; todo: this should only happen the first time
 ;; break rest into separate function
-              (let [head (first form)]
+              (let [head (inc-refs (first form))]
                 (if
                   (if (Seq$instance head)
                     (eq (first head) 'unquote)
@@ -233,23 +232,24 @@
 (impl expand-form Seq
   (fn _ {:params [form]}
     (if (Int$value (count form))
-      (let [head (call-mtd expand-form (first form))
+      (let [head (first form)
             tail (rest form)
             special
               (if (Symbol$instance head)
                 (if (eq head 'syntax-quote)
                   (let [gensym-num (call-mtd deref gensym-counter)
-                        form (call-mtd syntax-quote (first tail))]
+                        form (call-mtd syntax-quote (inc-refs (first tail)))]
                     (do (call-mtd reset! gensym-counter (inc gensym-num))
                         (call-mtd expand-form form)))
                   (let [macro (get (call-mtd deref macros) head nil)]
                     (if macro
-                      (do ;(inc-vector-seq-refs form)
-                          (call-mtd expand-form (macro tail)))
+                      (call-mtd expand-form (macro (map inc-refs tail)))
                       nil)))
                 nil)]
         (if special special
-          (cons head (map expand-form tail))))
+          (cons
+            (call-mtd expand-form (inc-refs head))
+            (map expand-form (map inc-refs tail)))))
       form)))
 
 (compile)
