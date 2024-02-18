@@ -7004,6 +7004,7 @@ const store_binding = funcs.build(
       wasm.local$get, ...env,
       wasm.call, ...atom_swap_lock.uleb128,
       wasm.local$tee, ...map,
+// todo: should expect keyword
       wasm.local$get, ...sym,
       wasm.call, ...types.Symbol.fields.namespace.uleb128,
       wasm.call, ...inc_refs.uleb128,
@@ -7407,6 +7408,9 @@ funcs.build(
           wasm.local$get, ...def_func,
         wasm.end,
       wasm.end,
+      // num_args is int literal, so won't be freed automatically
+      wasm.local$get, ...num_args,
+      wasm.call, ...free.uleb128,
       wasm.local$get, ...mtd_func,
       wasm.call, ...store_method.uleb128,
       wasm.call, ...impl_def_func_all_types.uleb128,
@@ -8431,7 +8435,7 @@ const replace_global_references = funcs.build(
 
 const comp_func_set_params = funcs.build(
   [wasm.i32, wasm.i32, wasm.i32],
-  [wasm.i32, wasm.i32, wasm.i32, wasm.i32, wasm.i32, wasm.i32],
+  [wasm.i32, wasm.i32, wasm.i32, wasm.i32, wasm.i32],
   {},
   function (func, config, env) {
     const params = this.local(wasm.i32),
@@ -8453,18 +8457,6 @@ const comp_func_set_params = funcs.build(
       wasm.call, ...add_result.uleb128,
       wasm.drop,
       wasm.local$get, ...config,
-      wasm.call, ...types.Vector.pred.uleb128,
-      wasm.if, wasm.i32,
-        wasm.i32$const, ...sleb128i32(empty_hash_map),
-        wasm.i32$const, ...sleb128i32(make_keyword("params")),
-        wasm.local$get, ...config,
-        wasm.call, ...assoc.uleb128,
-        wasm.local$get, ...config,
-        wasm.call, ...free.uleb128,
-      wasm.else,
-        wasm.local$get, ...config,
-      wasm.end,
-      wasm.local$tee, ...config,
       wasm.i32$const, ...sleb128i32(make_keyword("params")),
       wasm.i32$const, nil,
       wasm.call, ...get.uleb128,
@@ -8537,7 +8529,6 @@ const comp_func_set_params = funcs.build(
         wasm.end,
       wasm.end,
       wasm.local$get, ...env,
-      wasm.local$get, ...config,
       wasm.local$get, ...result,
       wasm.local$get, ...i32_count,
       wasm.local$get, ...i64_count,
@@ -9058,17 +9049,10 @@ def_special_form("fn", function (func, form, env) {
   return [
     wasm.local$get, ...form,
     wasm.call, ...first.uleb128,
-    wasm.local$set, ...name,
-    wasm.local$get, ...form,
-    wasm.call, ...rest.uleb128,
-    wasm.local$get, ...form,
-    wasm.call, ...free.uleb128,
-    wasm.local$tee, ...form,
-    wasm.call, ...first.uleb128,
-    wasm.local$set, ...params,
+    wasm.local$set, ...config,
     wasm.call, ...start_func.uleb128,
     wasm.local$tee, ...func_idx,
-    wasm.local$get, ...params,
+    wasm.local$get, ...config,
     wasm.local$get, ...env,
     wasm.call, ...new_env.uleb128,
     wasm.call, ...comp_func_set_params.uleb128,
@@ -9076,8 +9060,8 @@ def_special_form("fn", function (func, form, env) {
     wasm.local$set, ...i64_count,
     wasm.local$set, ...i32_count,
     wasm.local$set, ...result,
-    wasm.local$set, ...config,
     wasm.local$set, ...inner_env,
+// todo: move to comp_func_set_params
     wasm.local$get, ...config,
     wasm.i32$const, ...sleb128i32(make_keyword("params")),
     wasm.i32$const, nil,
@@ -9103,13 +9087,22 @@ def_special_form("fn", function (func, form, env) {
     wasm.local$get, ...f64_count,
     wasm.call, ...types.Function.constr.uleb128,
     wasm.local$set, ...fn,
-    wasm.local$get, ...func_idx,
-    wasm.local$get, ...inner_env,
-    wasm.local$get, ...name,
-    wasm.local$get, ...fn,
-    wasm.call, ...comp_func_add_local.uleb128,
-    wasm.local$get, ...inner_env,
-    wasm.call, ...free.uleb128,
+    wasm.local$get, ...config,
+    wasm.i32$const, ...sleb128i32(make_keyword("name")),
+    wasm.i32$const, nil,
+    wasm.call, ...get.uleb128,
+    wasm.local$tee, ...name,
+    wasm.if, wasm.i32,
+      wasm.local$get, ...func_idx,
+      wasm.local$get, ...inner_env,
+      wasm.local$get, ...name,
+      wasm.local$get, ...fn,
+      wasm.call, ...comp_func_add_local.uleb128,
+      wasm.local$get, ...inner_env,
+      wasm.call, ...free.uleb128,
+    wasm.else,
+      wasm.local$get, ...inner_env,
+    wasm.end,
     wasm.local$set, ...inner_env,
     // wasm.local$get, ...xpt,
     // wasm.if, wasm.void,
@@ -10016,10 +10009,71 @@ free_expanded.implement(types.Symbol, function (sym) {
   ];
 });
 
-const free_expanded_vector = funcs.build(
-  [wasm.i32, wasm.i32], [], {}, function (vec, idx) {
+function free_expanded_map_node (node) {
+  const arr = this.local(wasm.i32),
+	len = this.local(wasm.i32),
+        val = this.local(wasm.i32),
+        idx = this.local(wasm.i32);
+  return [
+    wasm.local$get, ...node,
+    wasm.call, ...types.PartialNode.fields.arr.uleb128,
+    wasm.local$tee, ...arr,
+    wasm.call, ...types.RefsArray.fields.arr.uleb128,
+    wasm.call, ...types.Array.fields.length.uleb128,
+    wasm.local$set, ...len,
+    wasm.loop, wasm.void,
+      wasm.local$get, ...len,
+      wasm.local$get, ...idx,
+      wasm.i32$gt_u,
+      wasm.if, wasm.void,
+        wasm.local$get, ...arr,
+        wasm.local$get, ...idx,
+        wasm.call, ...refs_array_get.uleb128,
+        wasm.local$tee, ...val,
+        wasm.call, ...free_expanded.uleb128,
+        wasm.local$get, ...idx,
+        wasm.i32$const, 1,
+        wasm.i32$add,
+        wasm.local$set, ...idx,
+        wasm.br, 1,
+      wasm.end,
+    wasm.end,
+  ];
+}
+
+free_expanded.implement(types.PartialNode, free_expanded_map_node);
+free_expanded.implement(types.FullNode, free_expanded_map_node);
+free_expanded.implement(types.HashCollisionNode, free_expanded_map_node);
+
+free_expanded.implement(types.LeafNode, function (node) {
+  return [
+    wasm.local$get, ...node,
+    wasm.call, ...types.LeafNode.fields.key.uleb128,
+    wasm.call, ...free_expanded.uleb128,
+    wasm.local$get, ...node,
+    wasm.call, ...types.LeafNode.fields.key.uleb128,
+    wasm.call, ...free.uleb128,
+    wasm.local$get, ...node,
+    wasm.call, ...types.LeafNode.fields.val.uleb128,
+    wasm.call, ...free_expanded.uleb128,
+    wasm.local$get, ...node,
+    wasm.call, ...types.LeafNode.fields.val.uleb128,
+    wasm.call, ...free.uleb128
+  ];
+});
+
+free_expanded.implement(types.HashMap, function (map) {
+  return [
+    wasm.local$get, ...map,
+    wasm.call, ...types.HashMap.fields.root.uleb128,
+    wasm.call, ...free_expanded.uleb128
+  ];
+});
+
+free_expanded.implement(types.Vector, function (vec) {
   const cnt = this.local(wasm.i32),
-        val = this.local(wasm.i32);
+        val = this.local(wasm.i32),
+        idx = this.local(wasm.i32);
   return [
     wasm.local$get, ...vec,
     wasm.call, ...count.uleb128,
@@ -10035,27 +10089,8 @@ const free_expanded_vector = funcs.build(
         wasm.call, ...nth.uleb128,
         wasm.local$tee, ...val,
         wasm.call, ...free_expanded.uleb128,
-//wasm.local$get, ...val,
-//wasm.call, ...read_refs.uleb128,
-//wasm.i32$eqz,
-//wasm.if, wasm.void,
-//  wasm.local$get, ...val,
-//  wasm.i32$load, 2, 0,
-//  wasm.i32$const, ...sleb128i32(32),
-//  wasm.i32$eq,
-//  wasm.if, wasm.void,
-//    wasm.local$get, ...val,
-//    wasm.call, ...count.uleb128,
-//    wasm.call, ...print_i32.uleb128,
-//  wasm.end,
-//wasm.else,
-  wasm.local$get, ...val,
-  wasm.call, ...free.uleb128,
-//wasm.end,
-//wasm.else,
-//  wasm.i32$const, ...sleb128i32(777),
-//  wasm.call, ...print_i32.uleb128,
-//wasm.end,
+        wasm.local$get, ...val,
+        wasm.call, ...free.uleb128,
         wasm.local$get, ...idx,
         wasm.i32$const, 1,
         wasm.i32$add,
@@ -10063,14 +10098,6 @@ const free_expanded_vector = funcs.build(
         wasm.br, 1,
       wasm.end,
     wasm.end,
-  ];
-});
-
-free_expanded.implement(types.Vector, function (vec) {
-  return [
-    wasm.local$get, ...vec,
-    wasm.i32$const, 0,
-    wasm.call, ...free_expanded_vector.uleb128
   ];
 });
 
@@ -10084,8 +10111,7 @@ free_expanded.implement(types.Seq, function (seq) {
       wasm.call, ...types.Seq.fields.root.uleb128,
       wasm.call, ...types.VectorSeq.fields.vec.uleb128,
       wasm.local$tee, ...vec,
-      wasm.i32$const, 0,
-      wasm.call, ...free_expanded_vector.uleb128,
+      wasm.call, ...free_expanded.uleb128,
       wasm.local$get, ...vec,
       wasm.call, ...free.uleb128,
     wasm.end,

@@ -2,42 +2,36 @@
 ;; expand tagged numbers to (Int$value) and (Float$value)
 ;; check vector/map for nested runtime ops, change to forms
 
-(cons :a ())
-(cons :a ())
-(cons :a ())
-(cons :a ())
-(cons :a ())
+(defmethod :to-str 1 nil)
 
-(defmethod 'to-str 1 nil)
+(defmethod :pr-str 1 to-str)
 
-(defmethod 'pr-str 1 to-str)
-
-(def 'pr
-  (fn _ {:params [x]}
+(def :pr
+  (fn {:params [x]}
     (js/console.log (call-mtd pr-str x))))
 
-(defmethod 'invoke 2 nil)
+(defmethod :invoke 2 nil)
 
 (impl invoke VariadicFunction
-  (fn _ {:params [f args]}
+  (fn {:params [f args]}
     (invoke
       (VariadicFunction$func f)
       (concat (VariadicFunction$args f) args))))
 
 (impl invoke Function
-  (fn _ {:params [f arg]} (f arg)))
+  (fn {:params [f arg]} (f arg)))
 
 (impl invoke Method
-  (fn _ {:params [m arg]}
+  (fn {:params [m arg]}
     (call-mtd m arg)))
 
-(def 'map
-  (fn map {:params [f coll]}
+(def :map
+  (fn {:name map :params [f coll]}
     (let [coll (to-seq coll)]
       (if (Int$value (count coll))
         (lazy-seq
-          (fn _ {:params [args]
-                 :scope (cons map (cons f (cons coll ())))}
+          (fn {:params [args]
+               :scope (cons map (cons f (cons coll ())))}
             (let [map (first args)
                   args (rest args)
                   f (first args)
@@ -50,21 +44,21 @@
 
 ;; todo: escape double quotes
 (impl pr-str String
-  (fn _ {:params [s]}
+  (fn {:params [s]}
     (concat-str "\""
       (concat-str s "\""))))
 
-(impl to-str Nil (fn _ {:params [_]} "nil"))
-(impl to-str True (fn _ {:params [_]} "true"))
-(impl to-str False (fn _ {:params [_]} "false"))
-(impl to-str String (fn _ {:params [s]} s))
+(impl to-str Nil (fn {:params [_]} "nil"))
+(impl to-str True (fn {:params [_]} "true"))
+(impl to-str False (fn {:params [_]} "false"))
+(impl to-str String (fn {:params [s]} s))
 
 (impl to-str Int
-  (fn _ {:params [i]}
+  (fn {:params [i]}
     (i64->string (Int$value i))))
 
 (impl to-str Symbol
-  (fn _ {:params [sym]}
+  (fn {:params [sym]}
     (let [ns (Symbol$namespace sym)
           nm (Symbol$name sym)]
       (if ns
@@ -73,7 +67,7 @@
         nm))))
 
 (impl to-str Keyword
-  (fn _ {:params [sym]}
+  (fn {:params [sym]}
     (let [ns (Keyword$namespace sym)
           nm (Keyword$name sym)]
       (concat-str ":"
@@ -83,7 +77,7 @@
           nm)))))
 
 (impl to-str Vector
-  (fn _ {:params [vec]}
+  (fn {:params [vec]}
     (let [n (Int$value (count vec))]
       (if n
         (let [i (Int$value 0)
@@ -100,7 +94,7 @@
         "[]"))))
 
 (impl to-str HashMap
-  (fn _ {:params [m]}
+  (fn {:params [m]}
     (if (Int$value (count m))
       (let [m (atom (to-seq m))
             s (atom "{")]
@@ -120,7 +114,7 @@
       "{}")))
 
 (impl to-str Seq
-  (fn _ {:params [seq]}
+  (fn {:params [seq]}
     (if (Int$value (count seq))
       (let [seq (atom seq)
             s (atom "(")]
@@ -137,10 +131,10 @@
 
 (compile)
 
-(defmethod 'syntax-quote 1 (fn _ {:params [x]} x))
+(defmethod :syntax-quote 1 (fn {:params [x]} x))
 
 (impl syntax-quote Seq
-  (fn f {:params [form]}
+  (fn {:name f :params [form]}
     (if (Int$value (count form))
       (cons 'concat
         (cons
@@ -160,56 +154,56 @@
       ())))
 
 (impl syntax-quote Vector
-  (fn _ {:params [vec]}
+  (fn {:params [vec]}
     (cons 'to-vec
       (cons
         (call-mtd syntax-quote (to-seq vec))
         ()))))
 
-(def 'not
-  (fn _ {:params [x]}
+(def :not
+  (fn {:params [x]}
     (if (eq x false)
       true
       (if (eq x nil)
         true
         false))))
 
-(def '+
-  (fn _ {:params [x y]}
+(def :+
+  (fn {:params [x y]}
     (Int$new
       (i64/add
         (Int$value x)
         (Int$value y)))))
 
-(def 'inc (fn _ {:params [x]} (+ x 1)))
+(def :inc (fn {:params [x]} (+ x 1)))
 
-(def '-
-  (fn _ {:params [x y]}
+(def :-
+  (fn {:params [x y]}
     (Int$new
       (i64/sub
         (Int$value x)
         (Int$value y)))))
 
-(def '<
-  (fn _ {:params [x y]}
+(def :<
+  (fn {:params [x y]}
     (if (i64/lt_u (Int$value x) (Int$value y))
       true
       false)))
 
-(def 'dec (fn _ {:params [x]} (- x 1)))
+(def :dec (fn {:params [x]} (- x 1)))
 
-(def 'string-ends-with
-  (fn _ {:params [string substring]}
+(def :string-ends-with
+  (fn {:params [string substring]}
     (string-matches-at string substring
       (Int$new
         (i64/sub
           (Int$value (String$length string))
           (Int$value (String$length substring)))))))
 
-(def 'gensym-counter (atom 0))
+(def :gensym-counter (atom 0))
 
 (impl syntax-quote Symbol
-  (fn f {:params [sym]}
+  (fn {:name f :params [sym]}
     (let [ns (Symbol$namespace sym)
           nm (Symbol$name sym)
           nm (if (not ns)
@@ -225,12 +219,12 @@
         (cons ns
           (cons nm ()))))))
 
-(def 'aliases (atom {}))
+(def :aliases (atom {}))
 
-(def 'macros (atom {}))
+(def :macros (atom {}))
 
 (impl expand-form Seq
-  (fn _ {:params [form]}
+  (fn {:params [form]}
     (if (Int$value (count form))
       (let [head (first form)
             tail (rest form)
@@ -256,7 +250,7 @@
 
 (call-mtd reset! macros
   (assoc (call-mtd deref macros) 'defmacro
-    (fn _ {:params [args]}
+    (fn {:params [args]}
       (let [nm (first args)
             fn (first (rest args))]
        `(do (compile)
@@ -272,7 +266,7 @@
 (cons :a ())
 
 (defmacro 'or
-  (fn _ {:params [args]}
+  (fn {:params [args]}
    `(let [x# ~(first args)]
       (if x# x#
        ~(first (rest args))))))
