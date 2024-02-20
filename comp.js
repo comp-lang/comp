@@ -8480,7 +8480,6 @@ const comp_func_set_params = funcs.build(
             wasm.local$get, ...env,
             wasm.local$get, ...env,
             wasm.local$get, ...curr_param,
-            wasm.call, ...inc_refs.uleb128,
             wasm.local$get, ...param_index,
             wasm.i64$extend_i32_u,
             wasm.call, ...types.Int.constr.uleb128,
@@ -8779,7 +8778,9 @@ def_special_form("let", function (func, forms, env) {
     wasm.call, ...first.uleb128,
     wasm.local$get, ...func,
     wasm.local$get, ...env,
-    wasm.call, ...emit_code.uleb128
+    wasm.call, ...emit_code.uleb128,
+    wasm.local$get, ...env,
+    wasm.call, ...free.uleb128
   ];
 });
 
@@ -9066,6 +9067,7 @@ def_special_form("fn", function (func, form, env) {
     wasm.i32$const, ...sleb128i32(make_keyword("params")),
     wasm.i32$const, nil,
     wasm.call, ...get.uleb128,
+    wasm.local$tee, ...params,
     wasm.local$get, ...func_idx,
     wasm.local$get, ...inner_env,
     wasm.call, ...off_local_refs_params.uleb128,
@@ -9193,6 +9195,8 @@ def_special_form("fn", function (func, form, env) {
     wasm.end,
     wasm.local$get, ...inner_env,
     wasm.call, ...free_env.uleb128,
+    wasm.local$get, ...config,
+    wasm.call, ...free.uleb128,
 // todo: free config when created here
     //wasm.local$get, ...config,
     //wasm.call, ...free_env.uleb128,
@@ -10215,11 +10219,11 @@ wasm.local$set, ...a,
       wasm.call, ...free_expanded.uleb128,
       wasm.local$get, ...form,
       wasm.call, ...free.uleb128,
-wasm.i32$const, ...sleb128i32(next_addr),
-wasm.i32$load, 2, 0,
-wasm.local$get, ...a,
-wasm.i32$sub,
-wasm.call, ...print_i32.uleb128,
+//wasm.i32$const, ...sleb128i32(next_addr),
+//wasm.i32$load, 2, 0,
+//wasm.local$get, ...a,
+//wasm.i32$sub,
+//wasm.call, ...print_i32.uleb128,
       //wasm.local$get, ...out,
       //wasm.i32$load, 2, 0,
       //wasm.local$get, ...out,
