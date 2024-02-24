@@ -25,6 +25,8 @@
   (fn {:params [m arg]}
     (call-mtd m arg)))
 
+(def :x (fn {:scope (cons 1 ()) :params [x]} (let [x x] x)))
+
 (def :map
   (fn {:name map :params [f coll]}
     (let [coll (to-seq coll)]

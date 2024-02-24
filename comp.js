@@ -6674,100 +6674,96 @@ to_seq.implement(types.HashMap, function (map) {
 
 to_vec.implement(types.HashMapSeq, seq_to_vec);
 
+/*-------*\
+|         |
+| keyword |
+|         |
+\*-------*/
+
+const keyword_store = new_atom(empty_hash_map),
+      keywords = {};
+
+// todo: merge keyword & symbol stores
+const keyword = funcs.build(
+  [wasm.i32, wasm.i32], [wasm.i32],
+  { export: "keyword", comp: "keyword" },
+  function (namespace, name) {
+    const kws = this.local(wasm.i32),
+          with_ns = this.local(wasm.i32),
+          out = this.local(wasm.i32);
+    return [
+      wasm.i32$const, ...sleb128i32(keyword_store),
+      wasm.call, ...atom_swap_lock.uleb128,
+      wasm.local$tee, ...kws,
+      wasm.local$get, ...namespace,
+      // wasm.i32$const, ...sleb128i32(no_entry),
+      wasm.call, ...get_map_entry.uleb128,
+      wasm.local$tee, ...with_ns,
+      wasm.i32$const, ...sleb128i32(no_entry),
+      wasm.i32$ne,
+      wasm.if, wasm.i32,
+        wasm.local$get, ...namespace,
+        wasm.call, ...free.uleb128,
+        wasm.local$get, ...with_ns,
+        wasm.call, ...types.LeafNode.fields.key.uleb128,
+        wasm.local$set, ...namespace,
+        wasm.local$get, ...with_ns,
+        wasm.call, ...types.LeafNode.fields.val.uleb128,
+        wasm.local$tee, ...with_ns,
+        wasm.local$get, ...name,
+        wasm.i32$const, 0,
+        wasm.call, ...get.uleb128,
+        wasm.local$tee, ...out,
+      wasm.else,
+        wasm.i32$const, ...sleb128i32(empty_hash_map),
+        wasm.local$set, ...with_ns,
+        wasm.i32$const, 0,
+      wasm.end,
+      wasm.if, wasm.void,
+        wasm.local$get, ...name,
+        wasm.call, ...free.uleb128,
+        wasm.i32$const, ...sleb128i32(keyword_store),
+        wasm.call, ...atom_swap_unlock.uleb128,
+        wasm.drop,
+      wasm.else,
+        wasm.local$get, ...namespace,
+        wasm.call, ...inc_refs.uleb128,
+        wasm.local$get, ...name,
+        wasm.call, ...inc_refs.uleb128,
+        wasm.call, ...types.Keyword.constr.uleb128,
+        wasm.local$set, ...out,
+        wasm.i32$const, ...sleb128i32(keyword_store),
+        wasm.local$get, ...kws,
+        wasm.local$get, ...namespace,
+        wasm.local$get, ...with_ns,
+        wasm.local$get, ...name,
+        wasm.local$get, ...out,
+        wasm.call, ...assoc.uleb128,
+        wasm.call, ...assoc.uleb128,
+        wasm.call, ...atom_swap_set.uleb128,
+        wasm.drop,
+        wasm.local$get, ...with_ns,
+        wasm.call, ...free.uleb128,
+        wasm.local$get, ...kws,
+        wasm.call, ...free.uleb128,
+      wasm.end,
+      wasm.local$get, ...out,
+    ];
+  }
+);
+
+function make_keyword (nm) {
+  if (typeof nm === "string") nm = cached_string(nm);
+  let out = keywords[nm];
+  if (out) return out;
+  return keywords[nm] = comp.keyword(0, nm);
+}
+
 /*------*\
 |        |
 | symbol |
 |        |
 \*------*/
-
-// todo: merge keyword & symbol stores
-const symkw = function (which) {
-  const store = new_atom(empty_hash_map);
-  let type = types.Symbol;
-  if (which === "keyword") type = types.Keyword;
-  return funcs.build(
-    [wasm.i32, wasm.i32],
-    [wasm.i32], { export: which, comp: which },
-    function (namespace, name) {
-      const syms = this.local(wasm.i32),
-            with_ns = this.local(wasm.i32),
-            out = this.local(wasm.i32);
-      return [
-        wasm.i32$const, ...sleb128i32(store),
-        wasm.call, ...atom_swap_lock.uleb128,
-        wasm.local$tee, ...syms,
-        wasm.local$get, ...namespace,
-        // wasm.i32$const, ...sleb128i32(no_entry),
-        wasm.call, ...get_map_entry.uleb128,
-        wasm.local$tee, ...with_ns,
-        wasm.i32$const, ...sleb128i32(no_entry),
-        wasm.i32$ne,
-        wasm.if, wasm.i32,
-          wasm.local$get, ...namespace,
-          wasm.call, ...free.uleb128,
-          wasm.local$get, ...with_ns,
-          wasm.call, ...types.LeafNode.fields.key.uleb128,
-          wasm.local$set, ...namespace,
-          wasm.local$get, ...with_ns,
-          wasm.call, ...types.LeafNode.fields.val.uleb128,
-          wasm.local$tee, ...with_ns,
-          wasm.local$get, ...name,
-          wasm.i32$const, 0,
-          wasm.call, ...get.uleb128,
-          wasm.local$tee, ...out,
-        wasm.else,
-          wasm.i32$const, ...sleb128i32(empty_hash_map),
-          wasm.local$set, ...with_ns,
-          wasm.i32$const, 0,
-        wasm.end,
-        wasm.if, wasm.void,
-          wasm.local$get, ...name,
-          wasm.call, ...free.uleb128,
-          wasm.i32$const, ...sleb128i32(store),
-          wasm.call, ...atom_swap_unlock.uleb128,
-          wasm.drop,
-        wasm.else,
-          wasm.local$get, ...namespace,
-          wasm.call, ...inc_refs.uleb128,
-          wasm.local$get, ...name,
-          wasm.call, ...inc_refs.uleb128,
-          wasm.call, ...type.constr.uleb128,
-          wasm.local$set, ...out,
-          wasm.i32$const, ...sleb128i32(store),
-          wasm.local$get, ...syms,
-          wasm.local$get, ...namespace,
-          wasm.local$get, ...with_ns,
-          wasm.local$get, ...name,
-          wasm.local$get, ...out,
-          wasm.call, ...assoc.uleb128,
-          wasm.call, ...assoc.uleb128,
-          wasm.call, ...atom_swap_set.uleb128,
-          wasm.drop,
-          wasm.local$get, ...with_ns,
-          wasm.call, ...free.uleb128,
-          wasm.local$get, ...syms,
-          wasm.call, ...free.uleb128,
-        wasm.end,
-        wasm.local$get, ...out,
-      ];
-    }
-  );
-}
-
-const keyword = symkw("keyword"),
-      // symbol = symkw("symbol"),
-      keywords = {},
-      symbols = {};
-
-function make_symkw (which) {
-  return function (nm) {
-    const store = which === "symbol" ? symbols : keywords;
-    if (typeof nm === "string") nm = cached_string(nm);
-    let out = store[nm];
-    if (out) return out;
-    return store[nm] = comp[which](0, nm);
-  }
-}
 
 const symbol = funcs.build(
   [wasm.i32, wasm.i32], [wasm.i32], { comp: "symbol" },
@@ -6786,9 +6782,6 @@ const make_symbol = function (nm) {
   if (typeof nm === "string") nm = cached_string(nm);
   return comp.Symbol(0, comp.inc_refs(nm));
 }
-
-// const make_symbol = make_symkw("symbol");
-const make_keyword = make_symkw("keyword");
 
 compile();
 
@@ -8590,6 +8583,8 @@ const emit_func_call = funcs.build(
           func_num = this.local(wasm.i32);
     return [
       wasm.local$get, ...args,
+      // prevent prematurely freeing original args
+      wasm.call, ...inc_refs.uleb128,
       wasm.call, ...count.uleb128,
       wasm.local$set, ...cnt,
       wasm.loop, wasm.void,
@@ -8772,8 +8767,8 @@ def_special_form("let", function (func, forms, env) {
     wasm.end,
     wasm.local$get, ...forms,
     wasm.call, ...rest.uleb128,
-    wasm.local$get, ...forms,
-    wasm.call, ...free.uleb128,
+    //wasm.local$get, ...forms,
+    //wasm.call, ...free.uleb128,
     wasm.local$tee, ...forms,
     wasm.call, ...first.uleb128,
     wasm.local$get, ...func,
@@ -9029,7 +9024,6 @@ const revert_local_refs = funcs.build(
   }
 );
 
-// todo: only set name when given in map
 def_special_form("fn", function (func, form, env) {
   const inner_env = this.local(wasm.i32),
         name = this.local(wasm.i32),
@@ -9117,8 +9111,9 @@ def_special_form("fn", function (func, form, env) {
     // wasm.end,
     wasm.local$get, ...form,
     wasm.call, ...rest.uleb128,
-    wasm.local$get, ...form,
-    wasm.call, ...free.uleb128,
+    wasm.local$tee, ...form,
+    //wasm.local$get, ...form,
+    //wasm.call, ...free.uleb128,
     wasm.call, ...first.uleb128,
     wasm.local$get, ...func_idx,
     wasm.local$get, ...inner_env,
@@ -9195,12 +9190,11 @@ def_special_form("fn", function (func, form, env) {
     wasm.end,
     wasm.local$get, ...inner_env,
     wasm.call, ...free_env.uleb128,
-    wasm.local$get, ...config,
-    wasm.call, ...free.uleb128,
-// todo: free config when created here
     //wasm.local$get, ...config,
-    //wasm.call, ...free_env.uleb128,
+    //wasm.call, ...free.uleb128,
     wasm.local$get, ...locals_to_revert,
+    wasm.call, ...free.uleb128,
+    wasm.local$get, ...form,
     wasm.call, ...free.uleb128,
     wasm.i32$const, 2
   ];
@@ -9265,8 +9259,8 @@ def_special_form("loop", function (func, forms, env) {
     wasm.local$set, ...to_revert_arr,
     wasm.local$get, ...forms,
     wasm.call, ...rest.uleb128,
-    wasm.local$get, ...forms,
-    wasm.call, ...free.uleb128,
+    //wasm.local$get, ...forms,
+    //wasm.call, ...free.uleb128,
     wasm.local$tee, ...forms,
     wasm.call, ...first.uleb128,
     wasm.local$get, ...func,
@@ -9367,8 +9361,8 @@ def_special_form("if", function (func, forms, env) {
     wasm.drop,
     wasm.local$get, ...forms,
     wasm.call, ...rest.uleb128,
-    wasm.local$get, ...forms,
-    wasm.call, ...free.uleb128,
+    //wasm.local$get, ...forms,
+    //wasm.call, ...free.uleb128,
     wasm.local$tee, ...forms,
     wasm.call, ...first.uleb128,
     wasm.local$get, ...func,
@@ -9534,8 +9528,8 @@ def_special_form("set-local", function (func, forms, env) {
     wasm.i32$eq,
     wasm.local$get, ...forms,
     wasm.call, ...rest.uleb128,
-    wasm.local$get, ...forms,
-    wasm.call, ...free.uleb128,
+    //wasm.local$get, ...forms,
+    //wasm.call, ...free.uleb128,
     wasm.local$tee, ...forms,
     wasm.call, ...first.uleb128,
     wasm.local$tee, ...val,
@@ -9668,6 +9662,10 @@ def_special_form("Int$value", function (func, args, env) {
 def_special_form("do", function (func, forms, env) {
   const result = this.local(wasm.i32);
   return [
+    // prevent prematurely freeing original forms
+    wasm.local$get, ...forms,
+    wasm.call, ...inc_refs.uleb128,
+    wasm.drop,
     wasm.local$get, ...env,
     wasm.call, ...inc_loop_depth.uleb128,
     wasm.local$set, ...env,
@@ -9700,10 +9698,9 @@ def_special_form("do", function (func, forms, env) {
     wasm.call, ...append_code.uleb128,
     wasm.drop,
     wasm.local$get, ...env,
-// todo: recursive?
     wasm.call, ...free.uleb128,
-    wasm.local$get, ...forms,
-    wasm.call, ...free.uleb128,
+    //wasm.local$get, ...forms,
+    //wasm.call, ...free.uleb128,
     wasm.local$get, ...result
   ];
 });
@@ -9715,8 +9712,8 @@ def_special_form("quote", function (func, forms, env) {
     wasm.local$get, ...func,
     wasm.local$get, ...env,
     wasm.call, ...emit_code_default.uleb128,
-    wasm.local$get, ...forms,
-    wasm.call, ...free.uleb128
+    //wasm.local$get, ...forms,
+    //wasm.call, ...free.uleb128
   ];
 });
 
@@ -9776,6 +9773,10 @@ const emit_code_num64 = funcs.build(
           wasm.call, ...eq.uleb128,
           wasm.i32$or,
           wasm.if, wasm.i32,
+            // prevent prematurely freeing original args
+            wasm.local$get, ...args,
+            wasm.call, ...inc_refs.uleb128,
+            wasm.drop,
             wasm.loop, wasm.void,
               wasm.local$get, ...args,
               wasm.call, ...count.uleb128,
@@ -9823,8 +9824,8 @@ const emit_code_num64 = funcs.build(
             wasm.else,
               wasm.i32$const, ...sleb128i32(wasm.f64),
             wasm.end,
-            wasm.local$get, ...args,
-            wasm.call, ...free.uleb128,
+            //wasm.local$get, ...args,
+            //wasm.call, ...free.uleb128,
           wasm.else,
             wasm.i32$const, 0,
           wasm.end,
@@ -9863,6 +9864,8 @@ const emit_js_func_call = funcs.build(
           wasm.i32$const, ...sleb128i32(wasm.i32$const),
           wasm.call, ...append_code.uleb128,
           wasm.local$get, ...args,
+          // prevent prematurely freeing original args
+          wasm.call, ...inc_refs.uleb128,
           wasm.call, ...count.uleb128,
           wasm.call, ...append_varuint32.uleb128,
           wasm.i32$const, ...sleb128i32(wasm.call),
@@ -9971,6 +9974,8 @@ emit_code.implement(types.Seq, function (list, func, env) {
           wasm.end,
         wasm.end,
       wasm.end,
+      wasm.local$get, ...args_list,
+      wasm.call, ...free.uleb128,
     wasm.else,
       wasm.local$get, ...func,
       wasm.i32$const, ...sleb128i32(wasm.i32$const),
@@ -10217,13 +10222,28 @@ wasm.local$set, ...a,
       wasm.end,
       wasm.local$get, ...form,
       wasm.call, ...free_expanded.uleb128,
+//wasm.local$get, ...form,
+//wasm.call, ...types.Seq.fields.root.uleb128,
+//wasm.call, ...types.VectorSeq.fields.vec.uleb128,
+//wasm.i32$const, 1,
+//wasm.i32$const, nil,
+//wasm.call, ...nth.uleb128,
+//wasm.i32$const, ...sleb128i32(make_keyword("params")),
+//wasm.i32$const, nil,
+//wasm.call, ...get.uleb128,
+//wasm.i32$const, 0,
+//wasm.i32$const, nil,
+//wasm.call, ...nth.uleb128,
+//wasm.call, ...types.Symbol.fields.name.uleb128,
+//wasm.call, ...read_refs.uleb128,
+//wasm.call, ...print_i32.uleb128,
       wasm.local$get, ...form,
       wasm.call, ...free.uleb128,
-//wasm.i32$const, ...sleb128i32(next_addr),
-//wasm.i32$load, 2, 0,
-//wasm.local$get, ...a,
-//wasm.i32$sub,
-//wasm.call, ...print_i32.uleb128,
+wasm.i32$const, ...sleb128i32(next_addr),
+wasm.i32$load, 2, 0,
+wasm.local$get, ...a,
+wasm.i32$sub,
+wasm.call, ...print_i32.uleb128,
       //wasm.local$get, ...out,
       //wasm.i32$load, 2, 0,
       //wasm.local$get, ...out,
