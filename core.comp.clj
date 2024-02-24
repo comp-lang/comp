@@ -2,6 +2,18 @@
 ;; expand tagged numbers to (Int$value) and (Float$value)
 ;; check vector/map for nested runtime ops, change to forms
 
+;(cons :a ())
+;(cons :a ())
+;(cons :a ())
+;(cons :a ())
+;(cons :a ())
+;
+;(fn {:params [x]} x)
+;(fn {:params [x]} x)
+;(fn {:params [x]} x)
+;(fn {:params [x]} x)
+;(fn {:params [x]} x)
+
 (defmethod :to-str 1 nil)
 
 (defmethod :pr-str 1 to-str)
@@ -234,7 +246,7 @@
               (if (Symbol$instance head)
                 (if (eq head 'syntax-quote)
                   (let [gensym-num (call-mtd deref gensym-counter)
-                        form (call-mtd syntax-quote (inc-refs (first tail)))]
+                        form (call-mtd syntax-quote (first tail))]
                     (do (call-mtd reset! gensym-counter (inc gensym-num))
                         (call-mtd expand-form form)))
                   (let [macro (get (call-mtd deref macros) head nil)]
@@ -245,7 +257,7 @@
         (if special special
           (cons
             (call-mtd expand-form (inc-refs head))
-            (map expand-form (map inc-refs tail)))))
+            (map expand-form tail))))
       form)))
 
 (compile)
