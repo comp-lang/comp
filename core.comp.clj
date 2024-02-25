@@ -156,7 +156,7 @@
             (cons
 ;; todo: this should only happen the first time
 ;; break rest into separate function
-              (let [head (inc-refs (first form))]
+              (let [head (first form)]
                 (if
                   (if (Seq$instance head)
                     (eq (first head) 'unquote)
@@ -251,55 +251,55 @@
                         (call-mtd expand-form form)))
                   (let [macro (get (call-mtd deref macros) head nil)]
                     (if macro
-                      (call-mtd expand-form (macro (map inc-refs tail)))
+                      (call-mtd expand-form (macro tail))
                       nil)))
                 nil)]
         (if special special
           (cons
-            (call-mtd expand-form (inc-refs head))
+            (call-mtd expand-form head)
             (map expand-form tail))))
       form)))
 
 (compile)
 
-(call-mtd reset! macros
-  (assoc (call-mtd deref macros) 'defmacro
-    (fn {:params [args]}
-      (let [nm (first args)
-            fn (first (rest args))]
-       `(do (compile)
-          (call-mtd reset! macros
-            (assoc (call-mtd deref macros) ~nm ~fn)))))))
-
-(compile)
-
 (cons :a ())
 (cons :a ())
 (cons :a ())
 (cons :a ())
 (cons :a ())
 
-(defmacro 'or
-  (fn {:params [args]}
-   `(let [x# ~(first args)]
-      (if x# x#
-       ~(first (rest args))))))
-
-(pr `x#)
-(pr `(a))
-(pr `(1 (2 3)))
-(pr (string-length "abc"))
-(pr (substring "abcd" 1 3))
-(pr (index-of-codepoint "abcd" 99))
-(pr (hash "abc"))
-(pr (eq 1 2))
-(pr (Method$instance deref))
-(pr (concat-str "a" "b"))
-(pr [1 2 3])
-(pr '(1 2 3))
-(pr (map inc [1 2 3]))
-(pr (or 17 "this should not print"))
-(pr (or nil "this should print"))
+;(call-mtd reset! macros
+;  (assoc (call-mtd deref macros) 'defmacro
+;    (fn {:params [args]}
+;      (let [nm (first args)
+;            fn (first (rest args))]
+;       `(do (compile)
+;          (call-mtd reset! macros
+;            (assoc (call-mtd deref macros) ~nm ~fn)))))))
+;
+;(compile)
+;
+;(defmacro 'or
+;  (fn {:params [args]}
+;   `(let [x# ~(first args)]
+;      (if x# x#
+;       ~(first (rest args))))))
+;
+;(pr `x#)
+;(pr `(a))
+;(pr `(1 (2 3)))
+;(pr (string-length "abc"))
+;(pr (substring "abcd" 1 3))
+;(pr (index-of-codepoint "abcd" 99))
+;(pr (hash "abc"))
+;(pr (eq 1 2))
+;(pr (Method$instance deref))
+;(pr (concat-str "a" "b"))
+;(pr [1 2 3])
+;(pr '(1 2 3))
+;(pr (map inc [1 2 3]))
+;(pr (or 17 "this should not print"))
+;(pr (or nil "this should print"))
 
 ;(impl expand-form Symbol
 ;  (fn _ {:params [s]}
