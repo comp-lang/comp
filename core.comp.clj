@@ -268,38 +268,38 @@
 (cons :a ())
 (cons :a ())
 
-;(call-mtd reset! macros
-;  (assoc (call-mtd deref macros) 'defmacro
-;    (fn {:params [args]}
-;      (let [nm (first args)
-;            fn (first (rest args))]
-;       `(do (compile)
-;          (call-mtd reset! macros
-;            (assoc (call-mtd deref macros) ~nm ~fn)))))))
-;
-;(compile)
-;
-;(defmacro 'or
-;  (fn {:params [args]}
-;   `(let [x# ~(first args)]
-;      (if x# x#
-;       ~(first (rest args))))))
-;
-;(pr `x#)
-;(pr `(a))
-;(pr `(1 (2 3)))
-;(pr (string-length "abc"))
-;(pr (substring "abcd" 1 3))
-;(pr (index-of-codepoint "abcd" 99))
-;(pr (hash "abc"))
-;(pr (eq 1 2))
-;(pr (Method$instance deref))
-;(pr (concat-str "a" "b"))
-;(pr [1 2 3])
-;(pr '(1 2 3))
-;(pr (map inc [1 2 3]))
-;(pr (or 17 "this should not print"))
-;(pr (or nil "this should print"))
+(call-mtd reset! macros
+  (assoc (call-mtd deref macros) 'defmacro
+    (fn {:params [args]}
+      (let [nm (first args)
+            fn (first (rest args))]
+       `(do (compile)
+          (call-mtd reset! macros
+            (assoc (call-mtd deref macros) ~nm ~fn)))))))
+
+(compile)
+
+(defmacro 'or
+  (fn {:params [args]}
+   `(let [x# ~(first args)]
+      (if x# x#
+       ~(first (rest args))))))
+
+(pr `x#)
+(pr `(a))
+(pr `(1 (2 3)))
+(pr (string-length "abc"))
+(pr (substring "abcd" 1 3))
+(pr (index-of-codepoint "abcd" 99))
+(pr (hash "abc"))
+(pr (eq 1 2))
+(pr (Method$instance deref))
+(pr (concat-str "a" "b"))
+(pr [1 2 3])
+(pr '(1 2 3))
+(pr (map inc [1 2 3]))
+(pr (or 17 "this should not print"))
+(pr (or nil "this should print"))
 
 ;(impl expand-form Symbol
 ;  (fn _ {:params [s]}
