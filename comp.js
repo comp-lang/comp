@@ -135,7 +135,7 @@ function uleb128i32 (num) {
   let count = 0;
   do {
     const byte_ = num & 0x7f;
-    num >>= 7;
+    num >>>= 7;
     arr[count++] = byte_ | (num ? 0x80 : 0);
   } while (num)
   return arr.subarray(0, count);
@@ -417,7 +417,7 @@ const encode = ((t) => t.encode.bind(t))(new TextEncoder),
 
 function wasm_encode_string (str) {
   const encoded = encode(str);
-  return [encoded.length, ...encoded];
+  return [...uleb128i32(encoded.length), ...encoded];
 }
 
 let module_section_enum = 0;
@@ -436,12 +436,15 @@ const type_section = module_section_enum++,
       data_section = module_section_enum++;
 
 const module_sections = module_len ? [] : [
+  // type
   [[wasm.func, 1, wasm.i32, 0]],
+  // memory
   [[
     ...wasm_encode_string("imports"),
     ...wasm_encode_string("memory"),
     2, 3, 1, ...uleb128i32(65536)
   ]],
+  // tag_import
   [
     [
       ...wasm_encode_string("imports"),
@@ -449,14 +452,23 @@ const module_sections = module_len ? [] : [
       4, 0, 0
     ]
   ],
+  // func_import
   [],
+  // func
   [],
+  // table
   [[wasm.funcref, 0, 0]],
+  // tag
   [[0, 0]],
+  // export
   [],
+  // start
   [],
+  // elem
   [],
+  // code
   [],
+  // data
   []
 ];
 
@@ -480,7 +492,7 @@ function b64_encode (arr) {
   let arr32 = new Uint32Array(arr.buffer),
       len = arr32.length,
       i = 0,
-      num = arr32[i],
+      num = arr32[0],
       byt_cnt = 0,
       bytes = new Uint8Array(3),
       string = '';
@@ -489,11 +501,10 @@ function b64_encode (arr) {
     while (byt_cnt < 3) {
       const byt = num & 0x7f;
       num >>>= 7;
-      bytes[byt_cnt] = byt | (num ? 0x80 : 0);
-      byt_cnt++;
-      if (!num) {
+      bytes[byt_cnt++] = byt | (num ? 0x80 : 0);
+      if (num === 0) {
         if (++i < len) num = arr32[i];
-	else break;
+        else break;
       }
     }
  
@@ -520,162 +531,395 @@ function b64_encode (arr) {
   return string;
 }
 
-let had_start_section = false;
+function read_type_section (byt) {
+  if (!this.arr) {
+    // this.read_num is section length - ignore & read arr length next
+    this.read_varuint = true;
+    this.arr = [];
+  } else if (!this.arr_cnt) { 
+    this.arr_cnt = this.read_num;
+  } else if (this.params) {
+    if (!this.params_cnt) {
+      this.params_cnt = this.read_num;
+      this.curr.push(this.read_num);
+    } else {
+      this.params.push(byt);
+    }
+    if (this.params.length === this.params_cnt) {
+      this.curr.push(...this.params);
+      delete this.params;
+      delete this.params_cnt;
+      this.results = [];
+      this.read_varuint = true;
+    }
+  } else if (this.results) {
+    if (!this.results_cnt) {
+      this.results_cnt = this.read_num;
+      this.curr.push(this.read_num);
+    } else {
+      this.results.push(byt);
+    }
+    if (this.results.length === this.results_cnt) {
+      this.curr.push(...this.results);
+      this.arr.push(this.curr);
+      delete this.results;
+      delete this.results_cnt;
+      delete this.curr;
+      if (this.arr.length === this.arr_cnt) {
+        module_sections.push(this.arr);
+        return;
+      }
+    }
+  } else {
+    this.curr = [byt];
+    this.params = [];
+    this.read_varuint = true;
+  }
+  return this;
+};
 
-// todo: faster to build Uint8Array directly?
-function build_module_section (curr, byt) {
-  function reader (type, varints, bytes, next) {
-    return {
-      type,
-      varints,
-      mod_sec: curr.mod_sec,
-      cnt: bytes || 0,
-      content: [],
-      prev: curr,
-      next: typeof next === "function" ? next : () => next
-    };
-  }
-  const first = !curr.type;
-  if (first) curr = reader(byt, 2);
-  const next = (function (curr) {
-    let next;
-    function final_next () {
-      this.mod_sec.push(curr.content);
-      curr.content = [];
-      return --curr.cnt ? build_module_section(curr, byt) : curr.prev;
+function read_import_section (byt) {
+  if (!this.mem) {
+    this.mem = [];
+    this.tag = [];
+    this.func = [];
+    // read count
+    this.read_varuint = true;
+  } else if (this.mod_nm_len) {
+    this.curr.push(byt);
+    if (!--this.mod_nm_len) {
+      // read exp_nm_len
+      this.read_varuint = true;
+      this.mod_nm = false;
+      this.exp_nm = true;
     }
-    switch (curr.type) {
-      // byte reader (array)
-      case -1:
-        curr.prev.content.push(byt);
-        return --curr.cnt ? curr : curr.next();
-      // varint reader (never appears here)
-      case -2: return;
-      // type section
-      case 1:
-        if (first) module_sections.push(curr.mod_sec = []);
-        return reader(-1, 0, 1,
-                 reader(-1, 1, 0,
-                   reader(-1, 1, 0, final_next)));
-      // import section
+  } else if (this.mod_nm) {
+    this.mod_nm_len = this.read_num;
+    this.curr.push(...this.read_bytes);
+  } else if (this.exp_nm_len) {
+    this.curr.push(byt);
+    if (!--this.exp_nm_len) {
+      this.read_kind = true;
+      this.exp_nm = false;
+    }
+  } else if (this.exp_nm) {
+    this.exp_nm_len = this.read_num;
+    this.curr.push(...this.read_bytes);
+  } else if (this.read_kind) {
+    this.curr.push(byt);
+    this.kind = byt;
+    this.read_kind = false;
+    switch (byt) {
+      // function
+      case 0:
+        this.fields = 1;
+        this.read_varuint = true;
+      break;
+      // memory
+      case 2: this.fields = 3; break;
+      // tag
+      case 4: this.fields = 2;
+    }
+  } else if (this.fields) {
+    this.fields--;
+    switch (this.kind) {
+      // function
+      case 0:
+        this.curr.push(...this.read_bytes);
+      break;
+      // memory
       case 2:
-        if (first) {
-          module_sections.push(
-            curr.memory_imports = [],
-            curr.tag_imports = [],
-            curr.func_imports = []
-          );
+        if (this.fields) {
+          this.curr.push(byt);
+          if (this.fields === 1) this.read_varuint = true;
+        } else {
+          this.curr.push(...this.read_bytes);
         }
-        next = reader(-2, 1, 0, function () {
-          let next;
-          if (this.cnt === 0) {
-            next = reader(-2, 1, 0, final_next);
-            next.mod_sec = curr.func_imports;
-          } else if (this.cnt === 2) {
-            next = reader(-2, 3, 0, final_next);
-            next.mod_sec = curr.memory_imports;
-          } else if (this.cnt === 4) {
-            next = reader(-2, 2, 0, final_next);
-            next.mod_sec = curr.tag_imports;
-          }
-          return next;
-        });
-        return reader(-1, 1, 0, reader(-1, 1, 0, next));
-      // function section
-      case 3:
-        curr.mod_sec = module_sections;
-        return reader(-1, 0, 1, function () {
-          this.cnt = curr.cnt - 1;
-          curr.cnt = 1;
-          this.next = final_next;
-          return this;
-        });
-      // table section
-      case 4:
-      // tag section
-      case 13:
-        if (first) module_sections.push(curr.mod_sec = []);
-      return reader(-2, curr.type === 4 ? 3 : 2, 0, final_next);
-      // export section
-      case 7:
-        if (first) module_sections.push(curr.mod_sec = []);
-        return reader(-1, 1, 0,
-                 reader(-1, 0, 1, 
-                   reader(-2, 1, 0, final_next)));
-      // start_section
-      case 8:
-        // skip start_section; we only want it in pre-compiled code
-        if (first) curr.mod_sec = [];
-        had_start_section = true;
-        curr.varints = 1;
-        return reader(-2, 1, 0, function () {
-          return curr.prev;
-        });
-      // elem section
-      case 9:
-        if (first) {
-          // empty start_section
-          module_sections.push([]);
-          module_sections.push(curr.mod_sec = []);
-        }
-        return reader(-2, 2, 0,
-                 reader(-1, 0, 1,
-                   reader(-2, 1, 0,
-                     reader(-1, 0, 3,
-                       reader(-2, 1, 0, final_next)))));
-      // code section
-      case 10:
-        if (first) module_sections.push(curr.mod_sec = []);
-        return reader(-1, 1, 0, final_next);
-      // data_section
-      case 11:
-        if (first) curr.mod_sec = module_sections;
-        curr.cnt = 1;
-        next = reader(-1, 1, 0, function () {
-          curr.content.splice(0, 3);
-          return final_next.call(this);
-        });
-        return reader(-1, 0, 4, function () {
-                 curr.content = [];
-                 return next;
-               });
+      break;
+      // tag
+      case 4: this.curr.push(byt);
     }
-  })(curr);
-  if (first) {
-    curr.next = () => next;
-    return curr;
+    if (!this.fields) {
+      switch (this.kind) {
+        case 0: this.func.push(this.curr); break;
+        case 2: this.mem.push(this.curr); break;
+        case 4: this.tag.push(this.curr); break;
+      }
+      if (!--this.all_cnt) {
+        module_sections.push(this.mem, this.tag, this.func);
+        return;
+      } else {
+        // read module name string length
+        this.read_varuint = true;
+        this.mod_nm = true;
+        this.curr = [];
+      }
+    }
+  } else {
+    if (!this.all_cnt) this.all_cnt = this.read_num;
+    // read module name string length
+    this.read_varuint = true;
+    this.mod_nm = true;
+    this.curr = [];
   }
-  return next;
+  return this;
 }
 
-function build_module_sections (bytes, idx, end, [curr, shift]) {
-  let next;
-  for (let i = idx; i < end; i++) {
-    if (i >= 8) {
-      if (!curr.type) {
-        curr = build_module_section(curr, bytes[i]);
-      } else if (curr.varints) {
-        if (curr.type < 0) curr.prev.content.push(bytes[i]);
-        curr.cnt |= (bytes[i] & 0x7f) << shift;
-        if (bytes[i] & 0x80) {
-          shift += 7;
-        } else {
-          curr.varints--;
-          shift = 0;
-          if (curr.type === -1) {
-            if (!curr.cnt) curr = curr.next();
-          } else if (!curr.varints) {
-            curr = curr.next();
-          } else {
-            curr.cnt = 0;
-          }
+function read_func_section (byt) {
+  if (!this.arr) {
+    this.arr = [];
+    // read number of functions
+    this.read_varuint = true;
+  } else if (!this.cnt) {
+    this.cnt = this.read_num;
+    this.read_varuint = true;
+  } else {
+    this.arr.push(this.read_num);
+    this.read_varuint = true
+    if (!--this.cnt) {
+      module_sections.push(this.arr);
+      return;
+    }
+  }
+  return this;
+}
+
+function read_table_section (byt) {
+  if (!this.arr) {
+    this.arr = [];
+    this.read_varuint = true;
+  } else if (!this.cnt) {
+    this.cnt = this.read_num;
+    this.curr = [];
+  } else {
+    switch (this.curr.length) {
+      case 0:
+        this.curr.push(byt);
+        this.read_varuint = true;
+      break;
+      case 1:
+        this.curr.push(this.read_num);
+        this.read_varuint = true;
+      break;
+      case 2:
+        this.curr.push(this.read_num);
+        this.arr.push(this.curr);
+        this.curr = [];
+        if (!--this.cnt) {
+          module_sections.push(this.arr);
+          return;
         }
-      } else {
-        curr = build_module_section(curr, bytes[i]);
+    }
+  }
+  return this;
+}
+
+function read_tag_section (byt) {
+  if (!this.arr) {
+    this.arr = [];
+    this.curr = [];
+    this.read_varuint = true;
+  } else if (!this.cnt) {
+    this.cnt = this.read_num;
+  } else {
+    this.curr.push(byt);
+    if (this.curr.length === 2) {
+      this.arr.push(this.curr);
+      if (!--this.cnt) {
+        module_sections.push(this.arr);
+        return;
       }
     }
   }
-  return [curr, shift];
+  return this;
+}
+
+function read_export_section (byt) {
+  if (!this.arr) {
+    this.arr = [];
+    this.read_varuint = true;
+  } else if (!this.cnt) {
+    this.cnt = this.read_num;
+    this.read_varuint = true;
+  } else if (!this.curr) {
+    this.name_len = this.read_num;
+    this.curr = [this.name_len];
+  } else if (this.name_len) {
+    this.curr.push(byt);
+    if (!--this.name_len) this.kind = true;
+  } else if (this.kind) {
+    this.curr.push(byt);
+    this.kind = false;
+    this.read_varuint = true;
+  } else {
+    this.curr.push(...this.read_bytes);
+    this.arr.push(this.curr);
+    delete this.curr;
+    this.read_varuint = true;
+    if (!--this.cnt) {
+      module_sections.push(this.arr);
+      return;
+    }
+  }
+  return this;
+}
+
+function read_start_section (byt) {
+  // discard start section; only want in precompiled code
+  if (!this.cnt) {
+    this.read_varuint = true;
+    this.cnt = 1;
+  } else {
+    this.read_varuint = true;
+    if (!--this.cnt) return;
+  }
+  return this;
+}
+
+function read_elem_section (byt) {
+  // empty start section
+  if (!this.arr) {
+    module_sections.push([]);
+    this.read_varuint = true;
+    this.arr = [];
+  } else if (!this.curr) {
+    this.cnt = this.read_num;
+    this.curr = [];
+    this.curr_cnt = 0;
+  } else {
+    switch (this.curr_cnt++) {
+      case 0:
+      case 6:
+        this.curr.push(byt);
+        this.read_varuint = true;
+      break;
+      case 2:
+        this.curr.push(byt);
+        this.read_varsint = true;
+      break;
+      case 1:
+      case 3:
+        this.curr.push(...this.read_bytes);
+      break;
+      case 4:
+      case 5:
+        this.curr.push(byt);
+      break;
+      case 7:
+        this.curr.push(...this.read_bytes);
+        this.arr.push(this.curr);
+        this.curr = [];
+        this.curr_cnt = 0;
+        if (!--this.cnt) {
+          module_sections.push(this.arr);
+		// console.log(module_sections[start_section], elem_section, module_sections.length);
+          return;
+        }
+    }
+  }
+  return this;
+}
+
+function read_code_section (byt) {
+  if (!this.arr) {
+    this.arr = [];
+    this.read_varuint = true;
+  } else if (!this.curr) {
+    this.curr = [];
+    this.cnt = this.read_num;
+    this.read_varuint = true;
+  } else if (!this.curr_cnt) {
+    this.curr.push(...this.read_bytes);
+    this.curr_cnt = this.read_num;
+  } else {
+    this.curr.push(byt);
+    if (!--this.curr_cnt) {
+      this.arr.push(this.curr);
+      this.curr = [];
+      this.read_varuint = true;
+      if (!--this.cnt) {
+        module_sections.push(this.arr);
+        return;
+      }
+    }
+  }
+  return this;
+}
+
+function read_data_section (byt) {
+  if (!this.arr) {
+    this.init_cnt = 6;
+    this.arr = [];
+  } else if (this.init_cnt) {
+    this.init_cnt--;
+    if (this.init_cnt === 1) this.read_varuint = true;
+    if (!this.init_cnt) this.cnt = this.read_num;
+  } else {
+    this.arr.push(byt);
+    if (!--this.cnt) {
+      module_sections.push(this.arr);
+      return;
+    }
+  }
+  return this;
+}
+
+function get_section_reader (byt) {
+  return {
+    num: 0,
+    shift: 0,
+    // start by reading section length
+    read_varuint: true,
+    reader: (function () {
+      switch (byt) {
+        case 1:  return read_type_section;
+        case 2:  return read_import_section;
+        case 3:  return read_func_section;
+        case 4:  return read_table_section;
+        case 13: return read_tag_section;
+        case 7:  return read_export_section;
+        case 8:  return read_start_section;
+        case 9:  return read_elem_section;
+        case 10: return read_code_section;
+        case 11: return read_data_section;
+      }
+    })()
+  };
+}
+
+function build_module_sections (bytes, idx, end, reader) {
+  for (let i = idx; i < end; i++) {
+    const byt = bytes[i];
+    if (!reader) {
+      reader = get_section_reader(byt);
+    } else {
+      if (reader.read_varsint || reader.read_varuint) {
+        if (reader.shift === 0) {
+          reader.read_bytes = [byt];
+        } else {
+          reader.read_bytes.push(byt);
+        }
+        reader.num |= (byt & 0x7f) << reader.shift;
+        reader.shift += 7;
+        if ((byt & 0x80) === 0) {
+          if (reader.read_varsint) {
+            if (reader.shift < 32 && (byt & 0x40) !== 0) {
+              reader.num |= (~0 << reader.shift);
+            }
+          }
+          reader.read_varuint = false;
+          reader.read_varsint = false;
+          reader.read_num = reader.num;
+          reader.num = 0;
+          reader.shift = 0;
+        }
+      }
+      if (!reader.read_varuint && !reader.read_varsint) {
+        reader = reader.reader(byt);
+      }
+    }
+  }
+  return reader;
 }
 
 function b64_decode (string, module_len, offset) {
@@ -689,8 +933,9 @@ function b64_decode (string, module_len, offset) {
       bytes = new Uint8Array(3),
       num = 0,
       shift = 0,
-      mod_sec_data = [{ type: 0, content: [] }, 0],
-      start_funcs_idx = 0;
+      reader,
+      start_funcs_idx = 0,
+      end_byte = 0;
 
   const buff = new ArrayBuffer(buff_len),
         arr32 = new Uint32Array(buff),
@@ -722,11 +967,16 @@ function b64_decode (string, module_len, offset) {
       if (bytes[j] & 0x80) {
         shift += 7;
       } else {
-        const start_byte = Math.max(idx * 4, offset) - offset;
+        let start_byte = end_byte || (idx * 4 - offset >= 8 ? 8 : 0);
         if (start_byte < module_len) {
           arr32[idx++] = num;
-          const end_byte = idx * 4 - offset;
-          mod_sec_data = build_module_sections(arr8, start_byte, end_byte, mod_sec_data);
+          // skip preamble:
+          if (start_byte >= 8) {
+            end_byte = idx * 4 - offset;
+            reader = build_module_sections(
+              arr8, start_byte, end_byte, reader
+            );
+          }
         } else {
           start_funcs_32[start_funcs_idx++] = num;
         }
@@ -739,6 +989,7 @@ function b64_decode (string, module_len, offset) {
   return arr8;
 };
 
+// todo: what are we doing with precompiled?
 let precompiled = null;
 
 if (module_len) precompiled = b64_decode(module_code, module_len, module_off);
@@ -1302,8 +1553,11 @@ const section_builders = {
     return built;
   },
   func_section: function f () {
-    const fs = module_sections[func_section],
-          len = fs.length,
+    const fs = [];
+    for (const f of module_sections[func_section]) {
+      fs.push(...sleb128i32(f));
+    }
+    const len = fs.length,
           sec = [...uleb128i32(len), ...fs],
           built = [3, ...uleb128i32(sec.length), ...sec];
     this.func_section = function () {
@@ -7030,15 +7284,15 @@ const local_free_is_external = pre_new_method(
   }
 );
 
-//const local_free_is_derived = pre_new_method(
-//  1, 0, 0, wasm.i32, {}, function (val) {
-//    return [
-//      wasm.local$get, ...val,
-//      wasm.i32$const, ...sleb128i32(derived_flag),
-//      wasm.call, ...get_flag.uleb128,
-//    ];
-//  }
-//);
+const local_free_is_derived = pre_new_method(
+  1, 0, 0, wasm.i32, {}, function (val) {
+    return [
+      wasm.local$get, ...val,
+      wasm.i32$const, ...sleb128i32(derived_flag),
+      wasm.call, ...get_flag.uleb128,
+    ];
+  }
+);
 
 const inc_refs_if_external_local = funcs.build(
   [wasm.i32, wasm.i32], [wasm.i32], {},
@@ -7063,9 +7317,8 @@ const inc_refs_if_external_local = funcs.build(
 for (const type of [types.Nil, types.False, types.True]) {
   off_check_local_free.implement(type, () => [wasm.i32$const, 0]);
   set_local_free_external.implement(type, () => [wasm.i32$const, 0]);
-  set_local_free_derived.implement(type, () => [wasm.i32$const, 0]);
   local_free_is_external.implement(type, () => [wasm.i32$const, 0]);
-  // local_free_is_derived.implement(type, () => [wasm.i32$const, 0]);
+  //local_free_is_derived.implement(type, () => [wasm.i32$const, 0]);
 }
 
 /*--------*\
@@ -11687,6 +11940,7 @@ try {
 
   if (!main_env.is_browser) {
     for (const file of argv.files) eval_file(file, !argv.compile);
+	//console.dir(module_sections[table_section],{maxArrayLength:null});
     if (argv.compile) fs.writeFile(argv.compile, build_package(), () => null);
   }
 } catch (e) {
