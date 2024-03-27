@@ -2,17 +2,17 @@
 ;; expand tagged numbers to (Int$value) and (Float$value)
 ;; check vector/map for nested runtime ops, change to forms
 
-;(cons :a ())
-;(cons :a ())
-;(cons :a ())
-;(cons :a ())
-;(cons :a ())
-;
-;(fn {:params [x]} x)
-;(fn {:params [x]} x)
-;(fn {:params [x]} x)
-;(fn {:params [x]} x)
-;(fn {:params [x]} x)
+(cons :a ())
+(cons :a ())
+(cons :a ())
+(cons :a ())
+(cons :a ())
+
+(fn {:params [x]} x)
+(fn {:params [x]} x)
+(fn {:params [x]} x)
+(fn {:params [x]} x)
+(fn {:params [x]} x)
 
 (defmethod :to-str 1 nil)
 
@@ -262,11 +262,11 @@
 
 (compile)
 
-(cons :a ())
-(cons :a ())
-(cons :a ())
-(cons :a ())
-(cons :a ())
+;(cons :a ())
+;(cons :a ())
+;(cons :a ())
+;(cons :a ())
+;(cons :a ())
 
 (call-mtd reset! macros
   (assoc (call-mtd deref macros) 'defmacro

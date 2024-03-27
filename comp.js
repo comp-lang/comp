@@ -3177,7 +3177,8 @@ function impl_free (type, free_self) {
       wasm.atomic$prefix,
       // atomically subtract 1 from refs, returns previous value:
       wasm.i32$atomic$rmw$sub, 2, 0,
-      wasm.i32$const, ...sleb128i32(0x3fffffff), // strip first two bits
+      // strip first three bits (used for local free)
+      wasm.i32$const, ...sleb128i32(0x1fffffff),
       wasm.i32$and,
       wasm.i32$eqz,
       wasm.if, wasm.void,
@@ -3202,7 +3203,6 @@ free.implement(types.Keyword, no_free);
 // todo: free these, but make sure global vars are protected
 free.implement(types.Method, no_free);
 free.implement(types.Type, no_free);
-free.implement(types.VariadicFunction, no_free);
 free.implement(types.Function, no_free);
 
 impl_free(types.Symbol, function (free_self) {
@@ -3214,6 +3214,14 @@ impl_free(types.Symbol, function (free_self) {
     wasm.call, ...types.Symbol.fields.name.uleb128,
     wasm.call, ...free.uleb128,
     ...free_self
+  ];
+});
+
+impl_free(types.VariadicFunction, function (free_self) {
+  return [
+    wasm.local$get, 0,
+    wasm.call, ...types.VariadicFunction.fields.args.uleb128,
+    wasm.call, ...free.uleb128
   ];
 });
 
@@ -6308,6 +6316,17 @@ impl_free(types.Seq, function (free_self) {
     wasm.local$get, ...seq,
     wasm.call, ...count.uleb128,
     wasm.if, wasm.void,
+//wasm.local$get, ...seq,
+//wasm.call, ...types.Seq.fields.root.uleb128,
+//wasm.i32$load, 2, 0,
+//wasm.i32$const, 26,
+//wasm.i32$eq,
+//wasm.if, wasm.void,
+//wasm.local$get, ...seq,
+//wasm.call, ...types.Seq.fields.root.uleb128,
+//wasm.call, ...read_refs.uleb128,
+//wasm.call, ...print_i32.uleb128,
+//wasm.end,
       wasm.local$get, ...seq,
       wasm.call, ...types.Seq.fields.root.uleb128,
       wasm.call, ...free.uleb128,
@@ -6479,8 +6498,9 @@ const gen_seq = funcs.build(
 impl_free(types.LazySeq, function (free_self) {
   const seq = [0];
   return [
-    wasm.local$get, ...seq,
-    wasm.call, ...gen_seq.uleb128,
+// todo: needed?
+    //wasm.local$get, ...seq,
+    //wasm.call, ...gen_seq.uleb128,
     wasm.local$get, ...seq,
     wasm.call, ...types.LazySeq.fields.generator.uleb128,
     wasm.call, ...free.uleb128,
@@ -6721,6 +6741,9 @@ rest.implement(types.VectorSeq, function (seq) {
 impl_free(types.VectorSeq, function (free_self) {
   const seq = [0];
   return [
+//wasm.local$get, ...seq,
+//wasm.i32$load, 2, 0,
+//wasm.call, ...print_i32.uleb128,
     wasm.local$get, ...seq,
     wasm.call, ...count.uleb128,
     wasm.if, wasm.void,
@@ -7300,6 +7323,9 @@ const inc_refs_if_external_local = funcs.build(
     return [
       wasm.local$get, ...src,
       wasm.call, ...local_free_is_external.uleb128,
+      wasm.local$get, ...src,
+      wasm.call, ...local_free_is_derived.uleb128,
+      wasm.i32$or,
       wasm.local$get, ...dst,
       wasm.call, ...local_free_is_external.uleb128,
       wasm.i32$eqz,
@@ -7314,11 +7340,36 @@ const inc_refs_if_external_local = funcs.build(
   }
 );
 
+const transfer_local_free_derived = funcs.build(
+  [wasm.i32, wasm.i32], [wasm.i32], {},
+  function (src, dst) {
+    return [
+      wasm.local$get, ...src,
+      wasm.call, ...local_free_is_external.uleb128,
+      wasm.local$get, ...src,
+      wasm.call, ...local_free_is_derived.uleb128,
+      wasm.i32$or,
+      wasm.local$get, ...dst,
+      wasm.call, ...local_free_is_external.uleb128,
+      wasm.i32$eqz,
+      wasm.i32$and,
+      wasm.if, wasm.void,
+        wasm.local$get, ...dst,
+        wasm.i32$const, 1,
+        wasm.call, ...set_local_free_derived.uleb128,
+        wasm.drop,
+      wasm.end,
+      wasm.local$get, ...dst,
+    ];
+  }
+);
+
 for (const type of [types.Nil, types.False, types.True]) {
   off_check_local_free.implement(type, () => [wasm.i32$const, 0]);
+  set_local_free_derived.implement(type, () => [wasm.i32$const, 0]);
   set_local_free_external.implement(type, () => [wasm.i32$const, 0]);
   local_free_is_external.implement(type, () => [wasm.i32$const, 0]);
-  //local_free_is_derived.implement(type, () => [wasm.i32$const, 0]);
+  local_free_is_derived.implement(type, () => [wasm.i32$const, 0]);
 }
 
 /*--------*\
@@ -7657,7 +7708,7 @@ funcs.build(
       wasm.local$get, ...coll,
       wasm.local$get, ...coll,
       wasm.call, ...rest.uleb128,
-      wasm.call, ...inc_refs_if_external_local.uleb128
+      wasm.call, ...transfer_local_free_derived.uleb128
     ];
   }
 );
@@ -7672,7 +7723,7 @@ funcs.build(
       wasm.call, ...to_seq.uleb128,
       wasm.call, ...inc_refs.uleb128,
       wasm.call, ...types.ConsSeq.constr.uleb128,
-      wasm.call, ...types.Seq.constr.uleb128
+      wasm.call, ...types.Seq.constr.uleb128,
     ];
   }
 );
@@ -10563,21 +10614,43 @@ wasm.local$set, ...a,
       wasm.local$get, ...form,
       wasm.i32$ne,
       wasm.if, wasm.void,
+//wasm.local$get, ...new_form,
+//wasm.call, ...types.Seq.fields.root.uleb128,
+//wasm.call, ...types.ConsSeq.fields.rest.uleb128,
+//wasm.call, ...types.Seq.fields.root.uleb128,
+////wasm.call, ...types.VectorSeq.fields.vec.uleb128,
+////wasm.call, ...types.Seq.fields.root.uleb128,
+////wasm.call, ...types.LazySeq.fields.seq.uleb128,
+//wasm.call, ...read_refs.uleb128,
+//wasm.call, ...print_i32.uleb128,
         wasm.local$get, ...new_form,
+//wasm.local$get, ...new_form,
+//wasm.call, ...types.Seq.fields.root.uleb128,
+//wasm.call, ...types.ConsSeq.fields.rest.uleb128,
+//wasm.local$set, ...new_form,
         wasm.call, ...free.uleb128,
+//wasm.local$get, ...new_form,
+//wasm.call, ...types.Seq.fields.root.uleb128,
+//wasm.call, ...types.LazySeq.fields.seq.uleb128,
+//wasm.call, ...read_refs.uleb128,
+//wasm.call, ...print_i32.uleb128,
 //wasm.local$get, ...form,
 //wasm.call, ...types.Seq.fields.root.uleb128,
 //wasm.call, ...types.VectorSeq.fields.vec.uleb128,
-//wasm.i32$const, 0,
-//wasm.i32$const, nil,
-//wasm.call, ...nth.uleb128,
+////wasm.i32$const, 0,
+////wasm.i32$const, nil,
+////wasm.call, ...nth.uleb128,
 //wasm.call, ...read_refs.uleb128,
 //wasm.call, ...print_i32.uleb128,
       wasm.end,
-      //wasm.local$get, ...form,
-      //wasm.call, ...free_expanded.uleb128,
+//wasm.local$get, ...form,
+//wasm.call, ...types.Seq.fields.root.uleb128,
+//wasm.call, ...types.VectorSeq.fields.vec.uleb128,
+//wasm.call, ...read_refs.uleb128,
+//wasm.call, ...print_i32.uleb128,
       wasm.local$get, ...form,
       wasm.call, ...free.uleb128,
+	 
 //wasm.i32$const, ...sleb128i32(next_addr),
 //wasm.i32$load, 2, 0,
 //wasm.local$get, ...a,
