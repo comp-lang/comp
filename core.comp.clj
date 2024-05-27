@@ -262,12 +262,6 @@
 
 (compile)
 
-;(cons :a ())
-;(cons :a ())
-;(cons :a ())
-;(cons :a ())
-;(cons :a ())
-
 (call-mtd reset! macros
   (assoc (call-mtd deref macros) 'defmacro
     (fn {:params [args]}
@@ -300,6 +294,12 @@
 (pr (map inc [1 2 3]))
 (pr (or 17 "this should not print"))
 (pr (or nil "this should print"))
+
+(cons :a ())
+(cons :a ())
+(cons :a ())
+(cons :a ())
+(cons :a ())
 
 ;(impl expand-form Symbol
 ;  (fn _ {:params [s]}
