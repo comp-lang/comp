@@ -43,7 +43,7 @@
       (if (Int$value (count coll))
         (lazy-seq
           (fn {:params [args]
-               :scope (cons map (cons f (cons coll ())))}
+               :scope (list map f coll)}
             (let [map (first args)
                   args (rest args)
                   f (first args)
@@ -53,6 +53,22 @@
                 (call-mtd invoke f (first coll))
                 (map f (rest coll))))))
         coll))))
+
+;(def :map!
+;  (fn {:params [f coll]}
+;    (let [arr (refs-array (Int$value (count coll)))
+;          idx (atom 0)]
+;      (do
+;        (for-each coll
+;          (fn {:params [args]
+;               :scope (cons f (cons coll (cons arr ())))}
+;            (let [f (first args)
+;                  args (rest args)
+;                  coll (first args)
+;                  args (rest args)
+;                  arr (first args)]
+;              (refs-array-set
+;
 
 ;; todo: escape double quotes
 (impl pr-str String
