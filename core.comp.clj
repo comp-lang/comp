@@ -37,8 +37,6 @@
   (fn {:params [m arg]}
     (call-mtd m arg)))
 
-(def :x (fn {:scope (cons 1 ()) :params [x]} (let [x x] x)))
-
 (def :map
   (fn {:name map :params [f coll]}
     (let [coll (to-seq coll)]
@@ -190,6 +188,25 @@
         (Int$value y)))))
 
 (def :inc (fn {:params [x]} (+ x 1)))
+
+;(def :try-map
+;  (fn {:params []}
+;    (let [v [1 2 3]
+;          coll (map inc v)
+;          x (first coll)
+;          r (rest coll)
+;          y (first r)]
+;      y)))
+;
+;(pr (try-map))
+;(pr (try-map))
+;(pr (try-map))
+;(pr (try-map))
+;(pr (try-map))
+;(pr (try-map))
+;(pr (try-map))
+;(pr (try-map))
+;(pr (try-map))
 
 (def :-
   (fn {:params [x y]}

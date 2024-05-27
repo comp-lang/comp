@@ -91,7 +91,7 @@
           ref_table,
           next_ref_address,
           module_code
-	);
+        );
       });
     }
   }
@@ -1597,7 +1597,7 @@ const section_builders = {
   export_section: function f () {
     const es = module_sections[export_section],
           len = es.length,
-	  sec = [...uleb128i32(len), ...es.flat()],
+          sec = [...uleb128i32(len), ...es.flat()],
           built = [7, ...uleb128i32(sec.length), ...sec];
     this.export_section = function () {
       if (module_sections[export_section].length === len) return built;
@@ -3257,6 +3257,30 @@ inc_refs.implement(types.Keyword, no_inc_refs);
 inc_refs.implement(types.Method, no_inc_refs);
 inc_refs.implement(types.Type, no_inc_refs);
 
+/*------------*\
+|              |
+| coll methods |
+|              |
+\*------------*/
+
+const get = pre_new_method(3, 0, 0, wasm.i32, { comp: "get" }),
+      assoc = pre_new_method(3, 0, 0, wasm.i32, {
+        export: "assoc", comp: "assoc"
+      }),
+      conj = pre_new_method( 2, 0, 0, wasm.i32, {
+        export: "conj", comp: "conj"
+      }),
+      nth = pre_new_method(3, 0, 0, wasm.i32, {}),
+      first = pre_new_method(1, 0, 0, wasm.i32, {}),
+      rest = pre_new_method(1, 0, 0, wasm.i32, {}),
+      count = pre_new_method(1, 0, 0, wasm.i32, {
+        comp: "count",
+        comp_wrapper: [wrap_result_i32_to_int]
+      }),
+      for_each = pre_new_method(2, 0, 0, wasm.i32, {}),
+      to_seq = pre_new_method(1, 0, 0, wasm.i32, { comp: "to-seq" }),
+      to_vec = pre_new_method(1, 0, 0, wasm.i32, { comp: "to-vec" });
+
 /*-----*\
 |       |
 | Array |
@@ -3475,6 +3499,47 @@ impl_free(types.RefsArray, function (free_self) {
       wasm.call, ...free.uleb128,
       ...free_self,
     wasm.end
+  ];
+});
+
+const refs_array_for_each = funcs.build(
+  [wasm.i32, wasm.i32, wasm.i32], [wasm.i32], {},
+  function (arr, func, idx) {
+    const len = this.local(wasm.i32);
+    return [
+      wasm.local$get, ...arr,
+      wasm.call, ...types.RefsArray.fields.arr.uleb128,
+      wasm.call, ...types.Array.fields.length.uleb128,
+      wasm.local$set, ...len,
+      wasm.loop, wasm.void,
+        wasm.local$get, ...idx,
+        wasm.local$get, ...len,
+        wasm.i32$lt_u,
+        wasm.if, wasm.void,
+          wasm.local$get, ...arr,
+          wasm.local$get, ...idx,
+          wasm.call, ...refs_array_get.uleb128,
+          wasm.local$get, ...func,
+          wasm.call_indirect, ...sleb128i32(get_type_idx(1, 0, 0, wasm.i32)), 0,
+          wasm.drop,
+          wasm.local$get, ...idx,
+          wasm.i32$const, 1,
+          wasm.i32$add,
+          wasm.local$set, ...idx,
+          wasm.br, 1,
+        wasm.end,
+      wasm.end,
+      wasm.i32$const, nil
+    ];
+  }
+);
+
+for_each.implement(types.RefsArray, function (arr, func) {
+  return [
+    wasm.local$get, ...arr,
+    wasm.local$get, ...func,
+    wasm.i32$const, 0,
+    wasm.call, ...refs_array_for_each.uleb128
   ];
 });
 
@@ -4518,6 +4583,32 @@ const concat_str = funcs.build(
   }
 );
 
+/*--------*\
+|          |
+| Function |
+|          |
+\*--------*/
+
+const func_tbl_idx = pre_new_method(1, 0, 0, wasm.i32, {});
+
+func_tbl_idx.implement(types.Function, types.Function.fields.tbl_idx.func_idx);
+
+func_tbl_idx.implement(types.VariadicFunction, function (func) {
+  return [
+    wasm.local$get, ...func,
+    wasm.call, ...types.VariadicFunction.fields.func.uleb128,
+    wasm.call, ...types.Function.fields.tbl_idx.uleb128
+  ];
+});
+
+func_tbl_idx.implement(types.Method, function (func) {
+  return [
+    wasm.local$get, ...func,
+    wasm.call, ...types.Method.fields.main_func.uleb128,
+    wasm.call, ...func_tbl_idx.uleb128
+  ];
+});
+
 /*------*\
 |        |
 | Object |
@@ -4533,30 +4624,6 @@ impl_free(types.Object, function (free_self) {
     ...free_self
   ];
 });
-
-/*------------*\
-|              |
-| coll methods |
-|              |
-\*------------*/
-
-const get = pre_new_method(3, 0, 0, wasm.i32, { comp: "get" }),
-      assoc = pre_new_method(3, 0, 0, wasm.i32, {
-        export: "assoc", comp: "assoc"
-      }),
-      conj = pre_new_method( 2, 0, 0, wasm.i32, {
-        export: "conj", comp: "conj"
-      }),
-      nth = pre_new_method(3, 0, 0, wasm.i32, {}),
-      first = pre_new_method(1, 0, 0, wasm.i32, {}),
-      rest = pre_new_method(1, 0, 0, wasm.i32, {}),
-      count = pre_new_method(1, 0, 0, wasm.i32, {
-        comp: "count",
-        comp_wrapper: [wrap_result_i32_to_int]
-      }),
-      for_each = pre_new_method(2, 0, 0, 0, {}),
-      to_seq = pre_new_method(1, 0, 0, wasm.i32, { comp: "to-seq" }),
-      to_vec = pre_new_method(1, 0, 0, wasm.i32, { comp: "to-vec" });
 
 /*------*\
 |        |
@@ -4997,6 +5064,102 @@ count.implement(types.Vector, function (vec) {
 });
 
 to_vec.implement(types.Vector, vec => [wasm.local$get, ...vec]);
+
+const vec_node_for_each = funcs.build(
+  [wasm.i32, wasm.i32, wasm.i32, wasm.i32, wasm.i32],
+  [wasm.i32], {},
+  function (vec, node, n, shift, func) {
+    const idx = this.local(wasm.i32),
+          len = this.local(wasm.i32),
+          shift2 = this.local(wasm.i32),
+          tail_start = this.local(wasm.i32),
+          entry = this.local(wasm.i32);
+    return [
+      wasm.local$get, ...n,
+      wasm.local$get, ...shift,
+      wasm.i32$shr_u,
+      wasm.i32$const, 31,
+      wasm.i32$and,
+      wasm.local$set, ...idx,
+      wasm.local$get, ...node,
+      wasm.call, ...types.RefsArray.fields.arr.uleb128,
+      wasm.call, ...types.Array.fields.length.uleb128,
+      wasm.local$set, ...len,
+      wasm.local$get, ...shift,
+      wasm.i32$const, 5,
+      wasm.i32$sub,
+      wasm.local$set, ...shift2,
+      wasm.loop, wasm.void,
+        wasm.local$get, ...idx,
+        wasm.local$get, ...len,
+        wasm.i32$lt_u,
+        wasm.if, wasm.void,
+          wasm.local$get, ...node,
+          wasm.local$get, ...idx,
+          wasm.call, ...refs_array_get.uleb128,
+          wasm.local$set, ...entry,
+          wasm.local$get, ...shift2,
+          wasm.if, wasm.void,
+            wasm.i32$const, nil,
+            wasm.local$get, ...entry,
+            wasm.local$get, ...n,
+            wasm.local$get, ...shift2,
+            wasm.local$get, ...func,
+            wasm.call, ...this.uleb128,
+            wasm.drop,
+          wasm.else,
+            wasm.local$get, ...entry,
+            wasm.local$get, ...func,
+            wasm.call_indirect, ...sleb128i32(get_type_idx(1, 0, 0, wasm.i32)), 0,
+            wasm.drop,
+          wasm.end,
+          wasm.local$get, ...idx,
+          wasm.i32$const, 1,
+          wasm.i32$add,
+          wasm.local$set, ...idx,
+          wasm.br, 1,
+        wasm.end,
+      wasm.end,
+      wasm.local$get, ...vec,
+      wasm.if, wasm.void,
+        wasm.local$get, ...vec,
+        wasm.call, ...types.Vector.fields.tail.uleb128,
+        wasm.local$get, ...func,
+        wasm.local$get, ...vec,
+        wasm.call, ...tail_off.uleb128,
+        wasm.local$tee, ...tail_start,
+        wasm.local$get, ...n,
+        wasm.i32$lt_u,
+        wasm.if, wasm.i32,
+          wasm.local$get, ...n,
+        wasm.else,
+          wasm.local$get, ...tail_start,
+        wasm.end,
+        wasm.i32$const, 31,
+        wasm.i32$and,
+        wasm.call, ...refs_array_for_each.uleb128,
+        wasm.drop,
+      wasm.end,
+      wasm.i32$const, nil
+    ];
+  }
+);
+
+// todo: do more efficiently
+for_each.implement(types.Vector, function (vec, func) {
+  const n = this.local(wasm.i32),
+        cnt = this.local(wasm.i32);
+  return [
+    wasm.local$get, ...vec,
+    wasm.local$get, ...vec,
+    wasm.call, ...types.Vector.fields.root.uleb128,
+    wasm.i32$const, 0,
+    wasm.local$get, ...vec,
+    wasm.call, ...types.Vector.fields.shift.uleb128,
+    wasm.local$get, ...func,
+    wasm.call, ...vec_node_for_each.uleb128
+  ];
+});
 
 const vector_from_array = funcs.build(
   [wasm.i32], [wasm.i32], {},
@@ -5624,14 +5787,16 @@ function map_node_for_each (node, func) {
         wasm.local$get, ...idx,
         wasm.call, ...refs_array_get.uleb128,
         wasm.local$get, ...func,
-        wasm.call, ...for_each.uleb128,
+        wasm.call_indirect, ...sleb128i32(get_type_idx(1, 0, 0, wasm.i32)), 0,
+        wasm.drop,
         wasm.local$get, ...idx,
         wasm.i32$const, 1,
         wasm.i32$add,
         wasm.local$set, ...idx,
         wasm.br, 1,
       wasm.end,
-    wasm.end
+    wasm.end,
+    wasm.i32$const, nil
   ];
 }
 
@@ -5639,16 +5804,18 @@ for_each.implement(types.PartialNode, map_node_for_each);
 for_each.implement(types.FullNode, map_node_for_each);
 for_each.implement(types.HashCollisionNode, map_node_for_each);
 
+// todo: should operate on [key, val]
 for_each.implement(types.LeafNode, function (node, func) {
   return [
     wasm.local$get, ...node,
     wasm.call, ...types.LeafNode.fields.key.uleb128,
     wasm.local$get, ...func,
-    wasm.call_indirect, ...sleb128i32(get_type_idx(1, 0, 0, 0)), 0,
+    wasm.call_indirect, ...sleb128i32(get_type_idx(1, 0, 0, wasm.i32)), 0,
+    wasm.drop,
     wasm.local$get, ...node,
     wasm.call, ...types.LeafNode.fields.val.uleb128,
     wasm.local$get, ...func,
-    wasm.call_indirect, ...sleb128i32(get_type_idx(1, 0, 0, 0)), 0,
+    wasm.call_indirect, ...sleb128i32(get_type_idx(1, 0, 0, wasm.i32)), 0,
   ];
 });
 
@@ -6368,6 +6535,32 @@ to_vec.implement(types.Seq, function (seq) {
   ];
 });
 
+// todo: implement for each root type
+for_each.implement(types.Seq, function (seq, func) {
+  return [
+    wasm.local$get, ...seq,
+    wasm.call, ...types.Seq.fields.root.uleb128,
+    wasm.local$get, ...func,
+    wasm.call, ...for_each.uleb128
+    //wasm.loop, wasm.void,
+    //  wasm.local$get, ...seq,
+    //  wasm.call, ...count.uleb128,
+    //  wasm.if, wasm.void,
+    //    wasm.local$get, ...seq,
+    //    wasm.call, ...first.uleb128,
+    //    wasm.local$get, ...func,
+    //    wasm.call_indirect, ...sleb128i32(get_type_idx(1, 0, 0, wasm.i32)), 0,
+    //    wasm.drop,
+    //    wasm.local$get, ...seq,
+    //    wasm.call, ...rest.uleb128,
+    //    wasm.local$set, ...seq,
+    //    wasm.br, 1,
+    //  wasm.end,
+    //wasm.end,
+    //wasm.i32$const, nil
+  ];
+});
+
 function seq_to_vec (seq) {
   const arr = this.local(wasm.i32),
         idx = this.local(wasm.i32);
@@ -6415,6 +6608,10 @@ function seq_to_vec (seq) {
 impl_free(types.ConsSeq, function (free_self) {
   const seq = [0];
   return [
+//wasm.local$get, ...seq,
+//wasm.call, ...types.ConsSeq.fields.rest.uleb128,
+//wasm.call, ...read_refs.uleb128,
+//wasm.call, ...print_i32.uleb128,
     wasm.local$get, ...seq,
     wasm.call, ...types.ConsSeq.fields.first.uleb128,
     wasm.call, ...free.uleb128,
@@ -6478,8 +6675,9 @@ const gen_seq = funcs.build(
         wasm.local$tee, ...gen,
         wasm.call, ...types.VariadicFunction.fields.args.uleb128,
         wasm.local$get, ...gen,
-        wasm.call, ...types.VariadicFunction.fields.func.uleb128,
-        wasm.call, ...types.Function.fields.tbl_idx.uleb128,
+        wasm.call, ...func_tbl_idx.uleb128,
+        //wasm.call, ...types.VariadicFunction.fields.func.uleb128,
+        //wasm.call, ...types.Function.fields.tbl_idx.uleb128,
         wasm.call_indirect,
         ...sleb128i32(get_type_idx(1, 0, 0, wasm.i32)), 0,
         wasm.atomic$prefix,
@@ -6501,6 +6699,12 @@ impl_free(types.LazySeq, function (free_self) {
 // todo: needed?
     //wasm.local$get, ...seq,
     //wasm.call, ...gen_seq.uleb128,
+//wasm.local$get, ...seq,
+//wasm.call, ...types.LazySeq.fields.seq.uleb128,
+//wasm.call, ...types.Seq.fields.root.uleb128,
+//wasm.call, ...types.ConsSeq.fields.rest.uleb128,
+//wasm.call, ...read_refs.uleb128,
+//wasm.call, ...print_i32.uleb128,
     wasm.local$get, ...seq,
     wasm.call, ...types.LazySeq.fields.generator.uleb128,
     wasm.call, ...free.uleb128,
@@ -6760,6 +6964,26 @@ to_vec.implement(types.VectorSeq, function (seq) {
   return [
     wasm.local$get, ...seq,
     wasm.call, ...types.VectorSeq.fields.vec.uleb128
+  ];
+});
+
+for_each.implement(types.VectorSeq, function (seq, func) {
+  const vec = this.local(wasm.i32);
+  return [
+    wasm.local$get, ...seq,
+    wasm.call, ...types.VectorSeq.fields.vec.uleb128,
+    wasm.local$tee, ...vec,
+    wasm.local$get, ...vec,
+    wasm.call, ...types.Vector.fields.root.uleb128,
+    wasm.local$get, ...seq,
+    wasm.call, ...types.VectorSeq.fields.vec_off.uleb128,
+    wasm.local$get, ...seq,
+    wasm.call, ...types.VectorSeq.fields.arr_off.uleb128,
+    wasm.i32$add,
+    wasm.local$get, ...vec,
+    wasm.call, ...types.Vector.fields.shift.uleb128,
+    wasm.local$get, ...func,
+    wasm.call, ...vec_node_for_each.uleb128
   ];
 });
 
@@ -7258,7 +7482,7 @@ const local_flag = 0x80000000,
 const off_check_local_free = pre_new_method(1, 0, 0, wasm.i32, {},
   function (val) {
     return [
-      // if is external, skip
+      // if external, skip
       wasm.local$get, ...val,
       wasm.i32$const, ...sleb128i32(external_flag),
       wasm.call, ...get_flag.uleb128,
@@ -7724,6 +7948,18 @@ funcs.build(
       wasm.call, ...inc_refs.uleb128,
       wasm.call, ...types.ConsSeq.constr.uleb128,
       wasm.call, ...types.Seq.constr.uleb128,
+    ];
+  }
+);
+
+funcs.build(
+  [wasm.i32, wasm.i32], [wasm.i32], { comp: "for-each" },
+  function (coll, func) {
+    return [
+      wasm.local$get, ...coll,
+      wasm.local$get, ...func,
+      wasm.call, ...func_tbl_idx.uleb128,
+      wasm.call, ...for_each.uleb128
     ];
   }
 );
@@ -8681,7 +8917,7 @@ const new_env = funcs.build(
 );
 
 const free_env_leaf = funcs.build(
-  [wasm.i32], [], {},
+  [wasm.i32], [wasm.i32], {},
   function (val) {
     const atom_val = this.local(wasm.i32);
     return [
@@ -8708,7 +8944,8 @@ const free_env_leaf = funcs.build(
         wasm.end,
         wasm.local$get, ...val,
         wasm.call, ...free.uleb128,
-      wasm.end
+      wasm.end,
+      wasm.i32$const, nil
     ];
   }
 );
@@ -8721,6 +8958,7 @@ const free_env = funcs.build(
       wasm.local$get, ...env,
       wasm.i32$const, ...sleb128i32(add_to_func_table(free_env_leaf.func_idx)),
       wasm.call, ...for_each.uleb128,
+      wasm.drop,
       wasm.local$get, ...env,
       wasm.call, ...free.uleb128
     ];
@@ -9086,6 +9324,20 @@ const emit_func_call = funcs.build(
   }
 );
 
+def_special_form("list", function (fn, args, env) {
+  return [
+    wasm.local$get, ...fn,
+    wasm.i32$const, ...sleb128i32(wasm.i32$const),
+    wasm.call, ...append_code.uleb128,
+    wasm.local$get, ...args,
+    // to prevent freeing
+    wasm.call, ...inc_refs.uleb128,
+    wasm.call, ...append_varsint32.uleb128,
+    wasm.drop,
+    wasm.i32$const, 2
+  ];
+});
+
 def_special_form("call-mtd", function (fn, args, env) {
   return [
     wasm.local$get, ...fn,
@@ -9309,6 +9561,8 @@ const off_check_local_free_return_val = funcs.build(
       wasm.local$set, ...local_typ,
       wasm.local$set, ...local_idx,
       wasm.local$set, ...was_on,
+      // set idx 0 and 1 of locals_to_revert arr
+      // (compare to off_check_local_free_params)
       wasm.local$get, ...arr,
       wasm.i32$const, 0,
       wasm.local$get, ...local_idx,
@@ -9334,6 +9588,7 @@ const off_check_local_free_params = funcs.build(
     return [
       wasm.local$get, ...params,
       wasm.call, ...count.uleb128,
+      // one extra slot for return val
       wasm.i32$const, 1,
       wasm.i32$add,
       wasm.i32$const, 2,
@@ -9341,6 +9596,9 @@ const off_check_local_free_params = funcs.build(
       wasm.local$tee, ...cnt,
       wasm.call, ...array_by_length.uleb128,
       wasm.local$set, ...arr,
+      // start from idx 2 so return val is at start of arr
+      // this allows reversion of local_free of param to
+      // override reversion of local val
       wasm.i32$const, 2,
       wasm.local$set, ...idx,
       wasm.loop, wasm.i32,
@@ -9811,6 +10069,7 @@ def_special_form("if", function (func, forms, env) {
       wasm.i32$const, 1,
     wasm.else,
       wasm.local$get, ...result2,
+      // conforms to any type
       wasm.i32$const, 1,
       wasm.i32$eq,
       wasm.if, wasm.i32,
@@ -9818,12 +10077,14 @@ def_special_form("if", function (func, forms, env) {
         wasm.local$tee, ...result2,
       wasm.else,
         wasm.local$get, ...result1,
+        // conforms to any type
         wasm.i32$const, 1,
         wasm.i32$eq,
         wasm.if, wasm.i32,
           wasm.i32$const, 1,
         wasm.else,
           wasm.local$get, ...result2,
+          // wasm.i32
           wasm.i32$const, 2,
           wasm.i32$eq,
           wasm.if, wasm.i32,
@@ -10156,7 +10417,7 @@ const emit_code_special_form = funcs.build(
           wasm.local$get, ...args,
           wasm.local$get, ...env,
           wasm.local$get, ...hdl,
-          wasm.call, ...types.Function.fields.tbl_idx.uleb128,
+          wasm.call, ...func_tbl_idx.uleb128,
           wasm.call_indirect,
           ...sleb128i32(get_type_idx(3, 0, 0, wasm.i32)), 0,
         wasm.else,
@@ -10440,7 +10701,7 @@ free_expanded.implement(types.Symbol, function (sym) {
 
 function free_expanded_map_node (node) {
   const arr = this.local(wasm.i32),
-	len = this.local(wasm.i32),
+        len = this.local(wasm.i32),
         val = this.local(wasm.i32),
         idx = this.local(wasm.i32);
   return [
@@ -10639,15 +10900,15 @@ wasm.local$set, ...a,
 //wasm.local$set, ...new_form,
         wasm.call, ...free.uleb128,
 
-wasm.local$get, ...form,
-wasm.call, ...types.Seq.fields.root.uleb128,
-//wasm.call, ...types.ConsSeq.fields.rest.uleb128,
+//wasm.local$get, ...form,
 //wasm.call, ...types.Seq.fields.root.uleb128,
-wasm.call, ...types.VectorSeq.fields.vec.uleb128,
+////wasm.call, ...types.ConsSeq.fields.rest.uleb128,
 ////wasm.call, ...types.Seq.fields.root.uleb128,
-////wasm.call, ...types.LazySeq.fields.seq.uleb128,
-wasm.call, ...read_refs.uleb128,
-wasm.call, ...print_i32.uleb128,
+//wasm.call, ...types.VectorSeq.fields.vec.uleb128,
+//////wasm.call, ...types.Seq.fields.root.uleb128,
+//////wasm.call, ...types.LazySeq.fields.seq.uleb128,
+//wasm.call, ...read_refs.uleb128,
+//wasm.call, ...print_i32.uleb128,
 
 //wasm.local$get, ...new_form,
 //wasm.call, ...types.Seq.fields.root.uleb128,
