@@ -6466,6 +6466,10 @@ rest.implement(types.Nil, function () {
   return [wasm.i32$const, ...sleb128i32(empty_seq)];
 });
 
+for_each.implement(types.Nil, function () {
+  return [wasm.i32$const, nil];
+});
+
 to_seq.implement(types.Nil, function () {
   return [wasm.i32$const, ...sleb128i32(empty_seq)];
 });
@@ -6535,29 +6539,12 @@ to_vec.implement(types.Seq, function (seq) {
   ];
 });
 
-// todo: implement for each root type
 for_each.implement(types.Seq, function (seq, func) {
   return [
     wasm.local$get, ...seq,
     wasm.call, ...types.Seq.fields.root.uleb128,
     wasm.local$get, ...func,
     wasm.call, ...for_each.uleb128
-    //wasm.loop, wasm.void,
-    //  wasm.local$get, ...seq,
-    //  wasm.call, ...count.uleb128,
-    //  wasm.if, wasm.void,
-    //    wasm.local$get, ...seq,
-    //    wasm.call, ...first.uleb128,
-    //    wasm.local$get, ...func,
-    //    wasm.call_indirect, ...sleb128i32(get_type_idx(1, 0, 0, wasm.i32)), 0,
-    //    wasm.drop,
-    //    wasm.local$get, ...seq,
-    //    wasm.call, ...rest.uleb128,
-    //    wasm.local$set, ...seq,
-    //    wasm.br, 1,
-    //  wasm.end,
-    //wasm.end,
-    //wasm.i32$const, nil
   ];
 });
 
@@ -6637,6 +6624,20 @@ rest.implement(types.ConsSeq, function (seq) {
     wasm.call, ...types.Seq.fields.root.uleb128,
     wasm.call, ...inc_refs.uleb128,
     wasm.call, ...types.Seq.constr.uleb128
+  ];
+});
+
+for_each.implement(types.ConsSeq, function (seq, func) {
+  return [
+    wasm.local$get, ...seq,
+    wasm.call, ...types.ConsSeq.fields.first.uleb128,
+    wasm.local$get, ...func,
+    wasm.call_indirect, ...sleb128i32(get_type_idx(1, 0, 0, wasm.i32)), 0,
+    wasm.drop,
+    wasm.local$get, ...seq,
+    wasm.call, ...types.ConsSeq.fields.rest.uleb128,
+    wasm.local$get, ...func,
+    wasm.call, ...for_each.uleb128
   ];
 });
 
@@ -6735,6 +6736,8 @@ rest.implement(types.LazySeq, function (seq) {
   ];
 });
 
+// todo: implement for_each
+
 count.implement(types.LazySeq, function (seq) {
   return [
     wasm.local$get, ...seq,
@@ -6824,6 +6827,20 @@ rest.implement(types.ConcatSeq, function (seq) {
       wasm.call, ...inc_refs.uleb128,
       wasm.call, ...types.Seq.constr.uleb128,
     wasm.end
+  ];
+});
+
+for_each.implement(types.ConcatSeq, function (seq, func) {
+  return [
+    wasm.local$get, ...seq,
+    wasm.call, ...types.ConcatSeq.fields.left.uleb128,
+    wasm.local$get, ...func,
+    wasm.call, ...for_each.uleb128,
+    wasm.drop,
+    wasm.local$get, ...seq,
+    wasm.call, ...types.ConcatSeq.fields.right.uleb128,
+    wasm.local$get, ...func,
+    wasm.call, ...for_each.uleb128,
   ];
 });
 
@@ -7057,6 +7074,8 @@ const vector_seq_from_array = funcs.build(
 |            |
 \*----------*/
 
+// todo: make sure it's putting key, val in vector
+
 impl_free(types.HashMapSeq, function (free_self) {
   const seq = [0];
   return [
@@ -7183,6 +7202,8 @@ rest.implement(types.HashMapNodeSeq, function (seq) {
     wasm.end
   ];
 });
+
+// todo: implement for_each
 
 to_seq.implement(types.HashMap, function (map) {
   const root = this.local(wasm.i32);
