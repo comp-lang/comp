@@ -52,6 +52,14 @@
               (map f (rest coll)))))
         coll))))
 
+(def :map!
+  (fn {:params [f coll map!]}
+    (if (Int$value (count coll))
+      (cons
+        (call-mtd invoke f (first coll))
+        (map! f (rest coll)))
+      coll)))
+
 ;(def :map!
 ;  (fn {:params [f coll _]}
 ;    (let [arr (refs-array (Int$value (count coll)))
@@ -298,7 +306,7 @@
         (if special special
           (cons
             (call-mtd expand-form head)
-            (consume-seq (map expand-form tail)))))
+            (map! expand-form tail))))
       form)))
 
 (compile)
