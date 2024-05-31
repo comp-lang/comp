@@ -1,26 +1,29 @@
 ;; todo:
 ;; expand tagged numbers to (Int$value) and (Float$value)
 ;; check vector/map for nested runtime ops, change to forms
+;; call-mtd not needed with named method
+;; compile after def?
 
-(cons :a ())
-(cons :a ())
-(cons :a ())
-(cons :a ())
-(cons :a ())
-
-(fn {:params [x]} x)
-(fn {:params [x]} x)
-(fn {:params [x]} x)
-(fn {:params [x]} x)
-(fn {:params [x]} x)
+;(cons :a ())
+;(cons :a ())
+;(cons :a ())
+;(cons :a ())
+;(cons :a ())
+;
+;(fn {:params [x]} x)
+;(fn {:params [x]} x)
+;(fn {:params [x]} x)
+;(fn {:params [x]} x)
+;(fn {:params [x]} x)
 
 (defmethod :to-str 1 nil)
 
 (defmethod :pr-str 1 to-str)
 
 (def :pr
-  (fn {:params [x]}
-    (js/console.log (call-mtd pr-str x))))
+  (fn {:params [x _]}
+    (js/console.log
+      (call-mtd pr-str x))))
 
 (defmethod :invoke 2 nil)
 
@@ -38,30 +41,25 @@
     (call-mtd m arg)))
 
 (def :map
-  (fn {:name map :params [f coll]}
+  (fn {:params [f coll map]}
     (let [coll (to-seq coll)]
       (if (Int$value (count coll))
         (lazy-seq
-          (fn {:params [args]
-               :scope (list map f coll)}
-            (let [map (first args)
-                  args (rest args)
-                  f (first args)
-                  args (rest args)
-                  coll (first args)]
-              (cons
-                (call-mtd invoke f (first coll))
-                (map f (rest coll))))))
+          (fn {:params [_]
+               :scope [map f coll]}
+            (cons
+              (call-mtd invoke f (first coll))
+              (map f (rest coll)))))
         coll))))
 
 ;(def :map!
-;  (fn {:params [f coll]}
+;  (fn {:params [f coll _]}
 ;    (let [arr (refs-array (Int$value (count coll)))
 ;          idx (atom 0)]
 ;      (do
 ;        (for-each coll
-;          (fn {:params [args]
-;               :scope (cons f (cons coll (cons arr ())))}
+;          (fn {:params [args _]
+;               :scope [f coll arr]}
 ;            (let [f (first args)
 ;                  args (rest args)
 ;                  coll (first args)
@@ -141,6 +139,12 @@
               (concat-str new-s "}")))))
       "{}")))
 
+(def :consume-seq
+  (fn {:params [seq f]}
+    (if (Int$value (count seq))
+      (cons (first seq) (f (rest seq)))
+      seq)))
+
 (impl to-str Seq
   (fn {:params [seq]}
     (if (Int$value (count seq))
@@ -161,8 +165,8 @@
 
 (defmethod :syntax-quote 1 (fn {:params [x]} x))
 
-(impl syntax-quote Seq
-  (fn {:name f :params [form]}
+(def :syntax-quote-seq
+  (fn {:params [form f]}
     (if (Int$value (count form))
       (cons 'concat
         (cons
@@ -181,6 +185,10 @@
           (cons (f (rest form)) ())))
       ())))
 
+(impl syntax-quote Seq
+  (fn {:params [form]}
+    (syntax-quote-seq form)))
+
 (impl syntax-quote Vector
   (fn {:params [vec]}
     (cons 'to-vec
@@ -189,7 +197,7 @@
         ()))))
 
 (def :not
-  (fn {:params [x]}
+  (fn {:params [x _]}
     (if (eq x false)
       true
       (if (eq x nil)
@@ -197,16 +205,18 @@
         false))))
 
 (def :+
-  (fn {:params [x y]}
+  (fn {:params [x y _]}
     (Int$new
       (i64/add
         (Int$value x)
         (Int$value y)))))
 
-(def :inc (fn {:params [x]} (+ x 1)))
+(def :inc (fn {:params [x _]} (+ x 1)))
+
+(def :dec (fn {:params [x _]} (- x 1)))
 
 ;(def :try-map
-;  (fn {:params []}
+;  (fn {:params [_]}
 ;    (let [v [1 2 3]
 ;          coll (map inc v)
 ;          x (first coll)
@@ -225,22 +235,20 @@
 ;(pr (try-map))
 
 (def :-
-  (fn {:params [x y]}
+  (fn {:params [x y _]}
     (Int$new
       (i64/sub
         (Int$value x)
         (Int$value y)))))
 
 (def :<
-  (fn {:params [x y]}
+  (fn {:params [x y _]}
     (if (i64/lt_u (Int$value x) (Int$value y))
       true
       false)))
 
-(def :dec (fn {:params [x]} (- x 1)))
-
 (def :string-ends-with
-  (fn {:params [string substring]}
+  (fn {:params [string substring _]}
     (string-matches-at string substring
       (Int$new
         (i64/sub
@@ -250,7 +258,7 @@
 (def :gensym-counter (atom 0))
 
 (impl syntax-quote Symbol
-  (fn {:name f :params [sym]}
+  (fn {:params [sym]}
     (let [ns (Symbol$namespace sym)
           nm (Symbol$name sym)
           nm (if (not ns)
@@ -290,14 +298,14 @@
         (if special special
           (cons
             (call-mtd expand-form head)
-            (map expand-form tail))))
+            (consume-seq (map expand-form tail)))))
       form)))
 
 (compile)
 
 (call-mtd reset! macros
   (assoc (call-mtd deref macros) 'defmacro
-    (fn {:params [args]}
+    (fn {:params [args _]}
       (let [nm (first args)
             fn (first (rest args))]
        `(do (compile)
@@ -307,12 +315,14 @@
 (compile)
 
 (defmacro 'or
-  (fn {:params [args]}
+  (fn {:params [args _]}
    `(let [x# ~(first args)]
       (if x# x#
        ~(first (rest args))))))
 
 (pr `x#)
+(pr `1)
+(pr `a)
 (pr `(a))
 (pr `(1 (2 3)))
 (pr (string-length "abc"))
@@ -324,18 +334,18 @@
 (pr (concat-str "a" "b"))
 (pr [1 2 3])
 (pr '(1 2 3))
-(pr (map inc [1 2 3]))
+(pr (map inc [4 5 6]))
 (pr (or 17 "this should not print"))
 (pr (or nil "this should print"))
-
-(cons :a ())
-(cons :a ())
-(cons :a ())
-(cons :a ())
-(cons :a ())
+;
+;(cons :a ())
+;(cons :a ())
+;(cons :a ())
+;(cons :a ())
+;(cons :a ())
 
 ;(impl expand-form Symbol
-;  (fn _ {:params [s]}
+;  (fn _ {:params [s _]}
 ;    (let [s* (get (call-mtd deref aliases) s nil)]
 ;      (if s*
 ;        s*
