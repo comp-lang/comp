@@ -8211,7 +8211,7 @@ funcs.build(
 );
 
 funcs.build(
-  [wasm.i32, wasm.i32], [wasm.i32], { comp: "def" },
+  [wasm.i32, wasm.i32], [wasm.i32], { comp: "def*" },
   function (name, val) {
     return [
       wasm.local$get, ...name,
@@ -8509,6 +8509,16 @@ funcs.build(
       wasm.local$get, ...val,
       wasm.call, ...print_i32.uleb128,
       wasm.i32$const, nil
+    ];
+  }
+);
+
+funcs.build(
+  [], [wasm.i32], { comp: "get-env" },
+  function () {
+    return [
+      wasm.i32$const, ...sleb128i32(global_env),
+      wasm.call, ...atom_deref.uleb128
     ];
   }
 );
@@ -10133,7 +10143,7 @@ const revert_local_free = funcs.build(
   }
 );
 
-def_special_form("fn", function (func, form, env) {
+def_special_form("fn*", function (func, form, env) {
   const inner_env = this.local(wasm.i32),
         name = this.local(wasm.i32),
         config = this.local(wasm.i32),
@@ -10600,8 +10610,9 @@ def_special_form("throw", function (func, forms, env) {
     wasm.drop,
     wasm.local$get, ...forms,
     wasm.call, ...rest.uleb128,
-    wasm.local$get, ...forms,
-    wasm.call, ...free.uleb128,
+// todo: why can't we free here?
+    //wasm.local$get, ...forms,
+    //wasm.call, ...free.uleb128,
     wasm.local$tee, ...forms,
     wasm.call, ...first.uleb128,
     wasm.local$get, ...func,
@@ -10927,6 +10938,14 @@ const emit_code_num64 = funcs.build(
             wasm.call, ...eq.uleb128,
             wasm.local$get, ...nm,
             wasm.i32$const, ...sleb128i32(cached_string("lt_u")),
+            wasm.call, ...eq.uleb128,
+            wasm.i32$or,
+            wasm.local$get, ...nm,
+            wasm.i32$const, ...sleb128i32(cached_string("gt_u")),
+            wasm.call, ...eq.uleb128,
+            wasm.i32$or,
+            wasm.local$get, ...nm,
+            wasm.i32$const, ...sleb128i32(cached_string("ge_u")),
             wasm.call, ...eq.uleb128,
             wasm.i32$or,
             wasm.if, wasm.void,
