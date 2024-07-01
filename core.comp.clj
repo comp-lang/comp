@@ -1,87 +1,82 @@
 ;; todo:
 ;; expand tagged numbers to (Int$value) and (Float$value)
 ;; check vector/map for nested runtime ops, change to forms
-;; call-mtd not needed with named method
+;; comment in list before close parens adds extra argument
 ;; compile after def?
+;; replace call-mtd with general form to limit args
 
-(defmethod :to-str 1 nil)
+(defmethod :to-str 2 nil)
 
-(defmethod :pr-str 1 to-str)
+(defmethod :pr-str 2
+  (fn {:params [x _]}
+    (call-mtd to-str x to-str)))
 
-(def* :pr
-  (fn* {:params [x _]}
+(defmethod :syntax-quote 2 (fn {:params [x _]} x))
+
+(compile)
+
+(def :pr
+  (fn {:params [x _]}
     (js/console.log
-      (call-mtd pr-str x))))
+      (pr-str x))))
 
-(defmethod :invoke 2 nil)
-
-(impl invoke VariadicFunction
-  (fn* {:params [f args]}
-    (invoke
-      (VariadicFunction$func f)
-      (concat (VariadicFunction$args f) args))))
-
-(impl invoke Function
-  (fn* {:params [f arg]} (f arg)))
-
-(impl invoke Method
-  (fn* {:params [m arg]}
-    (call-mtd m arg)))
-
-;(def* :map
-;  (fn* {:params [f coll map]}
-;    (let [coll (to-seq coll)]
-;      (if (Int$value (count coll))
-;        (lazy-seq
-;          (fn* {:params [_]
-;               :scope [map f coll]}
-;            (cons
-;              (call-mtd invoke f (first coll))
-;              (map f (rest coll)))))
-;        coll))))
-
-(def* :map!
-  (fn* {:params [f coll map!]}
+(def :map
+  (fn {:params [f coll map]}
     (let [coll (to-seq coll)]
       (if (Int$value (count coll))
-        (cons
-          (call-mtd invoke f (first coll))
-          (map! f (rest coll)))
+        (lazy-seq
+          (fn {:params [_]
+               :scope [map f coll]}
+            (cons
+              (f (first coll))
+              (map f (rest coll)))))
         coll))))
 
-;(def* :map!
-;  (fn* {:params [f coll _]}
-;    (let [arr (refs-array (Int$value (count coll)))
+;(def :map!
+;  (fn {:params [f coll map!]}
+;    (let [coll (to-seq coll)]
+;      (if (Int$value (count coll))
+;        (cons
+;          (f (first coll))
+;          (map! f (rest coll)))
+;        coll))))
+
+;(def :map!
+;  (fn {:params [f coll _]}
+;    (let [cnt (count coll)
+;          arr (array cnt)
 ;          idx (atom 0)]
 ;      (do
-;        (for-each coll
-;          (fn* {:params [args _]
-;               :scope [f coll arr]}
-;            (let [f (first args)
-;                  args (rest args)
-;                  coll (first args)
-;                  args (rest args)
-;                  arr (first args)]
-;              (refs-array-set
-;
+;        (loop []
+;          (let [n (deref idx)]
+;            (if (i64/lt_u (Int$value n) (Int$value cnt))
+;              (let [el (nth coll n nil)
+;                    el (f el)]
+;                (do (array-set arr n el)
+;                    (reset! idx
+;                      (Int$new
+;                        (i64/add (Int$value n) (Int$value 1))))
+;                    (recur)))
+;              nil)))
+;        (to-seq arr)))))
 
 ;; todo: escape double quotes
 (impl pr-str String
-  (fn* {:params [s]}
+  (fn {:params [s _]}
     (concat-str "\""
       (concat-str s "\""))))
 
-(impl to-str Nil (fn* {:params [_]} "nil"))
-(impl to-str True (fn* {:params [_]} "true"))
-(impl to-str False (fn* {:params [_]} "false"))
-(impl to-str String (fn* {:params [s]} s))
+(impl to-str Nil (fn {:params [_ _]} "nil"))
+(impl to-str True (fn {:params [_ _]} "true"))
+(impl to-str False (fn {:params [_ _]} "false"))
+(impl to-str String (fn {:params [s _]} s))
 
 (impl to-str Int
-  (fn* {:params [i]}
+  (fn {:params [i _]}
     (i64->string (Int$value i))))
 
 (impl to-str Symbol
-  (fn* {:params [sym]}
+  (fn {:params [sym _]}
     (let [ns (Symbol$namespace sym)
           nm (Symbol$name sym)]
       (if ns
@@ -90,7 +85,7 @@
         nm))))
 
 (impl to-str Keyword
-  (fn* {:params [sym]}
+  (fn {:params [sym _]}
     (let [ns (Keyword$namespace sym)
           nm (Keyword$name sym)]
       (concat-str ":"
@@ -99,169 +94,150 @@
             (concat-str "/" nm))
           nm)))))
 
+(def :map!
+  (fn {:params [f coll _]}
+    (let [cnt (count coll)]
+      (if (Int$value cnt)
+        (to-seq
+          (for-each coll (array cnt)
+            (fn {:params [el accum i _] :scope [f]}
+              (array-set accum i (f el)))))
+        ()))))
+
 (impl to-str Vector
-  (fn* {:params [vec]}
-    (let [n (Int$value (count vec))]
-      (if n
-        (let [i (Int$value 0)
-              s (atom "[")]
-          (loop [vec s]
-            (let [el (call-mtd pr-str (nth vec (Int$new i) nil))
-                  new-s (concat-str (call-mtd deref s) el)]
-              (if (i64/eq i (i64/sub n (Int$value 1)))
-                (concat-str new-s "]")
-                (do
-                  (call-mtd reset! s (concat-str new-s " "))
-                  (set-local i (i64/add i (Int$value 1)))
-                  (recur))))))
+  (fn {:params [vec _]}
+    (let [cnt (Int$value (count vec))
+          n (Int$new (i64/sub cnt (Int$value 1)))]
+      (if cnt
+        (for-each vec "["
+          (fn {:params [el accum i _] :scope [n]}
+            (let [accum (concat-str accum (pr-str el))]
+              (if (i64/lt_u (Int$value i) (Int$value n))
+                (concat-str accum " ")
+                (concat-str accum "]")))))
         "[]"))))
 
 (impl to-str HashMap
-  (fn* {:params [m]}
-    (if (Int$value (count m))
-      (let [m (atom (to-seq m))
-            s (atom "{")]
-        (loop [m s]
-          (let [kv (first (call-mtd deref m))
-                k (pr-str (LeafNode$key kv))
-                v (pr-str (LeafNode$val kv))
-                new-s (concat-str (call-mtd deref s)
-                        (concat-str k
-                          (concat-str " " v)))
-                m (call-mtd reset! m (rest (call-mtd deref m)))]
-            (if (Int$value (count m))
-              (do
-                (call-mtd reset! s (concat-str new-s " "))
-                (recur))
-              (concat-str new-s "}")))))
-      "{}")))
+  (fn {:params [m _]}
+    (let [cnt (Int$value (count m))
+          n (Int$new (i64/sub cnt (Int$value 1)))]
+      (if cnt
+        (for-each m "{"
+          (fn {:params [kv accum i _] :scope [n]}
+            (let [k (pr-str (LeafNode$key kv))
+                  accum (concat-str (concat-str accum k) " ")
+                  v (pr-str (LeafNode$val kv))
+                  accum (concat-str accum v)]
+              (if (i64/lt_u (Int$value i) (Int$value n))
+                (concat-str accum " ")
+                (concat-str accum "}")))))
+        "{}"))))
 
 (impl to-str Function
-  (fn* {:params [f]}
+  (fn {:params [f _]}
     "#function"))
 
-(def* :consume-seq
-  (fn* {:params [seq f]}
-    (if (Int$value (count seq))
-      (cons (first seq) (f (rest seq)))
-      seq)))
-
 (impl to-str Seq
-  (fn* {:params [seq]}
-    (if (Int$value (count seq))
-      (let [seq (atom seq)
-            s (atom "(")]
-        (loop [seq s]
-          (let [val (call-mtd pr-str (first (call-mtd deref seq)))
-                new-s (concat-str (call-mtd deref s) val)
-                seq (call-mtd reset! seq (rest (call-mtd deref seq)))]
-            (if (Int$value (count seq))
-              (do
-                (call-mtd reset! s (concat-str new-s " "))
-                (recur))
-              (concat-str new-s ")")))))
-      "()")))
+  (fn {:params [seq _]}
+    (let [cnt (Int$value (count seq))]
+      (if cnt
+        (let [n (Int$new (i64/sub cnt (Int$value 1)))]
+          (for-each seq "("
+            (fn {:params [el accum i _] :scope [n]}
+              (let [accum (concat-str accum (pr-str el))]
+                (if (i64/lt_u (Int$value i) (Int$value n))
+                  (concat-str accum " ")
+                  (concat-str accum ")"))))))
+        "()"))))
 
 (compile)
 
-(defmethod :syntax-quote 1 (fn* {:params [x]} x))
-
-(def* :syntax-quote-seq
-  (fn* {:params [form f]}
-    (if (Int$value (count form))
-      (cons 'concat
-        (cons
-          (cons 'cons
-            (cons
-;; todo: this should only happen the first time
-;; break rest into separate function
-              (let [head (first form)]
-                (if
-                  (if (Seq$instance head)
-                    (eq (first head) 'unquote)
-                    false)
-                  (first (rest head))
-                  (call-mtd syntax-quote head)))
-              (cons () ())))
-          (cons (f (rest form)) ())))
-      ())))
-
+;; todo: handle splicing-unquote
 (impl syntax-quote Seq
-  (fn* {:params [form]}
-    (syntax-quote-seq form)))
+  (fn {:params [form _]}
+    (let [cnt (Int$value (count form))]
+      (if cnt
+        (let [accum (array (Int$new (i64/add cnt (Int$value 1))))]
+          (to-seq
+            (for-each form
+              (array-set accum 0 (symbol nil "list"))
+              (fn {:params [el accum i _]}
+                (let [el (if (if (Seq$instance el)
+                               (if (eq (first el) 'unquote)
+                                 true
+                                 false)
+                               false)
+                           (nth el 1 nil)
+                           (syntax-quote el))]
+                  (array-set accum
+                    (Int$new (i64/add (Int$value i) (Int$value 1)))
+                    el))))))
+       ()))))
 
 (impl syntax-quote Vector
-  (fn* {:params [vec]}
-    (cons 'to-vec
-      (cons
-        (call-mtd syntax-quote (to-seq vec))
-        ()))))
+  (fn {:params [vec _]}
+    (list
+      (symbol nil "to-vec")
+      (syntax-quote (to-seq vec)))))
 
-(def* :not
-  (fn* {:params [x _]}
+(def :not
+  (fn {:params [x _]}
     (if (eq x false)
       true
       (if (eq x nil)
         true
         false))))
 
-(def* :+
-  (fn* {:params [x y _]}
+(def :+
+  (fn {:params [x y _]}
     (Int$new
       (i64/add
         (Int$value x)
         (Int$value y)))))
 
-(def* :inc (fn* {:params [x _]} (+ x 1)))
+(def :inc (fn {:params [x _]} (+ x 1)))
 
-(def* :-
-  (fn* {:params [x y _]}
+(def :-
+  (fn {:params [x y _]}
     (Int$new
       (i64/sub
         (Int$value x)
         (Int$value y)))))
 
-(def* :dec (fn* {:params [x _]} (- x 1)))
+(def :dec (fn {:params [x _]} (- x 1)))
 
-(def* :*
-  (fn* {:params [x y _]}
+(def :*
+  (fn {:params [x y _]}
     (Int$new
       (i64/mul
         (Int$value x)
         (Int$value y)))))
 
-(def* :<
-  (fn* {:params [x y _]}
+(def :<
+  (fn {:params [x y _]}
     (if (i64/lt_u (Int$value x) (Int$value y))
       true
       false)))
 
-(def* :>
-  (fn* {:params [x y _]}
+(def :>
+  (fn {:params [x y _]}
     (if (i64/gt_u (Int$value x) (Int$value y))
       true
       false)))
 
-;(def* :factorial
-;  (fn* {:params [x f]}
-;    (if (< x 2)
-;      x
-;      (* x (f (- x 1))))))
-;
-;(pr (factorial 7))
-
-(def* :string-ends-with
-  (fn* {:params [string substring _]}
+(def :string-ends-with
+  (fn {:params [string substring _]}
     (string-matches-at string substring
       (Int$new
         (i64/sub
           (Int$value (String$length string))
           (Int$value (String$length substring)))))))
 
-(def* :gensym-counter (atom 0))
+(def :gensym-counter (atom 0))
 
+;; todo: pass environment as arg
 (impl syntax-quote Symbol
-  (fn* {:params [sym]}
+  (fn {:params [sym _]}
     (let [ns (Symbol$namespace sym)
           nm (Symbol$name sym)
           nm (if (not ns)
@@ -270,92 +246,117 @@
                    (concat-str
                      (substring-until nm 0 (- (String$length nm) 1))
                      "__gensym__")
-                   (to-str (call-mtd deref gensym-counter)))
+                   (to-str (deref gensym-counter)))
                  nm)
                nm)]
-      (cons 'symbol
-        (cons ns
-          (cons nm ()))))))
+      (list (symbol nil "symbol") ns nm))))
 
-(def* :macros (atom {}))
+(def :special-forms (atom {}))
 
 (impl expand-form Seq
-  (fn* {:params [form]}
+  (fn {:params [form env]}
     (if (Int$value (count form))
       (let [head (first form)
             tail (rest form)
             special
               (if (Symbol$instance head)
-                (if (eq head 'syntax-quote)
-                  (let [gensym-num (call-mtd deref gensym-counter)
-                        form (call-mtd syntax-quote (first tail))]
-                    (do (call-mtd reset! gensym-counter (inc gensym-num))
-                        (call-mtd expand-form form)))
-                  (let [head (call-mtd expand-form head)
-                        macro (get (call-mtd deref macros) head nil)]
-                    (if macro
-                      (call-mtd expand-form (macro tail))
-                      nil)))
+                (if (eq head (symbol nil "syntax-quote"))
+                  (let [gensym-num (deref gensym-counter)
+                        form (syntax-quote (first tail))]
+                    (do (reset! gensym-counter (inc gensym-num))
+                        (call-mtd expand-form form env)))
+                  (let [head (call-mtd expand-form head env)
+                        special (get (deref special-forms) head nil)]
+                    (if special (special tail env) nil)))
                 nil)]
         (if special special
-          (cons
-            (call-mtd expand-form head)
-            (map! expand-form tail))))
+          (map!
+            (fn {:params [form _] :scope [env]}
+              (call-mtd expand-form form env))
+            form)))
       form)))
 
-(def* :curr-ns (atom (list 'comp.core)))
+(def :curr-ns (atom (list 'comp.core)))
 
-(def* :aliases (atom {}))
+(def :aliases (atom {}))
 
 ;; todo: throw if namespaced
-(def* :store-alias
-  (fn* {:params [sym _]}
-    (let [ns (Symbol$name (first (call-mtd deref curr-ns)))
-          full (symbol ns (Symbol$name sym))]
-      (call-mtd reset! aliases
-        (assoc
-          (assoc (call-mtd deref aliases) sym full)
-          full full)))))
+(def :store-alias
+  (fn {:params [alias sym _]}
+    (do
+      (reset! aliases
+        (assoc (deref aliases) alias sym))
+      nil)))
+
+;(store-alias 'do 'do)
+;(store-alias 'compile 'compile)
+;(store-alias 'store-ns-alias 'store-ns-alias)
+;(store-alias 'symbol 'symbol)
+;(store-alias 'let 'let)
+;(store-alias 'def 'def)
+
+(def :store-ns-alias
+  (fn {:params [alias _]}
+    (let [ns (Symbol$name (first (deref curr-ns)))
+          full (symbol ns (Symbol$name alias))]
+      (do (store-alias alias full)
+          (store-alias full full)))))
 
 (compile)
 
-(call-mtd reset! macros
-  (assoc (call-mtd deref macros) 'defmacro
-    (fn* {:params [args _]}
+(reset! special-forms
+  (assoc (deref special-forms) 'defspecial
+    (fn {:params [args env _]}
       (let [nm (Symbol$name (first args))
-            fn (first (rest args))]
-       `(do (compile)
-          (store-alias (symbol nil ~nm))
-          (call-mtd reset! macros
-            (assoc
-              (call-mtd deref macros)
-              (get (call-mtd deref aliases) (symbol nil ~nm) nil)
-              ~fn)))))))
+            fn (nth args 1 nil)]
+        (call-mtd expand-form
+         `(do (compile)
+            (store-ns-alias (symbol nil ~nm))
+            (reset! special-forms
+              (assoc
+                (deref special-forms)
+                (get (deref aliases) (symbol nil ~nm) nil)
+                ~fn)))
+          env)))))
 
 (compile)
 
-(defmacro or
-  (fn* {:params [args _]}
-   `(let [x# ~(first args)]
-      (if x# x#
-       ~(first (rest args))))))
+(defspecial or
+  (fn {:params [args env _]}
+    (call-mtd expand-form
+     `(let [x# ~(first args)]
+        (if x# x#
+         ~(nth args 1 nil)))
+      env)))
 
-(defmacro fn
-  (fn* {:params [args _]}
+(defspecial fn
+  (fn {:params [args env _]}
     (let [config {}
           nm (first args)
           params (conj (nth args 1 nil) nm)
           config (assoc config :params params)]
-     `(fn* ~config ~(nth args 2 nil)))))
+      (list 'fn config
+        (call-mtd expand-form (nth args 2 nil) env)))))
 
-(defmacro def
-  (fn* {:params [args _]}
+(defspecial def
+  (fn {:params [args env _]}
     (let [nm (Symbol$name (first args))]
-     `(do (compile)
-        (store-alias (symbol nil ~nm))
-        (let [full (get (call-mtd deref aliases) (symbol nil ~nm) nil)
-              kw (keyword (Symbol$namespace full) (Symbol$name full))]
-          (def* kw ~(nth args 1 nil)))))))
+      (list 'do (list 'compile)
+        (list 'store-ns-alias (list 'symbol nil nm))
+        (list 'let
+          (to-vec
+            (list
+              'full
+              (list 'get
+                (list 'deref 'aliases)
+                (list 'symbol nil nm)
+                nil)
+              'kw
+              (list 'keyword
+                (list 'Symbol$namespace 'full)
+                (list 'Symbol$name 'full))))
+          (list 'def 'kw
+            (call-mtd expand-form (nth args 1 nil) env)))))))
 
 (pr `x#)
 (pr `1)
@@ -375,14 +376,17 @@
 (pr (comp.core/or 17 "this should not print"))
 (pr (comp.core/or nil "this should print"))
 
-(impl expand-form Symbol
-  (fn* {:params [s]}
-    (get (call-mtd deref aliases) s s)))
-    ;(let [ss (get (call-mtd deref aliases) s nil)]
-    ;  (if ss
-    ;    ss
-    ;    (if ss
-    ;      (call-mtd expand-form ss)
-    ;      (throw s
-    ;        (concat-str "symbol not found: " (to-str s))))))))
-
+;(impl expand-form Symbol
+;  (fn {:params [s env]}
+;    ;(get (deref aliases) s s)))
+;    (let [ss (get (deref aliases) s nil)]
+;      (if ss
+;        ss
+;        (if ss
+;          (call-mtd expand-form ss env)
+;          s)))))
+;          ;(throw s
+;          ;  (concat-str "symbol not found: " (to-str s))))))))
+;
+;(compile)
+;
