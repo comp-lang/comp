@@ -15,6 +15,47 @@
 
 (compile)
 
+(def :not
+  (fn {:params [x _]}
+    (if (eq x false)
+      true
+      (if (eq x nil)
+        true
+        false))))
+
+(def :+
+  (fn {:params [x y _]}
+    (Int$new
+      (i64/add
+        (Int$value x)
+        (Int$value y)))))
+
+(def :-
+  (fn {:params [x y _]}
+    (Int$new
+      (i64/sub
+        (Int$value x)
+        (Int$value y)))))
+
+(def :*
+  (fn {:params [x y _]}
+    (Int$new
+      (i64/mul
+        (Int$value x)
+        (Int$value y)))))
+
+(def :<
+  (fn {:params [x y _]}
+    (if (i64/lt_u (Int$value x) (Int$value y))
+      true
+      false)))
+
+(def :>
+  (fn {:params [x y _]}
+    (if (i64/gt_u (Int$value x) (Int$value y))
+      true
+      false)))
+
 (def :pr
   (fn {:params [x _]}
     (js/console.log
@@ -23,7 +64,7 @@
 (def :map
   (fn {:params [f coll map]}
     (let [coll (to-seq coll)]
-      (if (Int$value (count coll))
+      (if (> (count coll) 0)
         (lazy-seq
           (fn {:params [_]
                :scope [map f coll]}
@@ -32,33 +73,12 @@
               (map f (rest coll)))))
         coll))))
 
-;(def :map!
-;  (fn {:params [f coll map!]}
-;    (let [coll (to-seq coll)]
-;      (if (Int$value (count coll))
-;        (cons
-;          (f (first coll))
-;          (map! f (rest coll)))
-;        coll))))
-
-;(def :map!
-;  (fn {:params [f coll _]}
-;    (let [cnt (count coll)
-;          arr (array cnt)
-;          idx (atom 0)]
-;      (do
-;        (loop []
-;          (let [n (deref idx)]
-;            (if (i64/lt_u (Int$value n) (Int$value cnt))
-;              (let [el (nth coll n nil)
-;                    el (f el)]
-;                (do (array-set arr n el)
-;                    (reset! idx
-;                      (Int$new
-;                        (i64/add (Int$value n) (Int$value 1))))
-;                    (recur)))
-;              nil)))
-;        (to-seq arr)))))
+(def :map!
+  (fn {:params [f coll _]}
+    (to-seq
+      (for-each coll (array (count coll))
+        (fn {:params [el arr i _] :scope [f]}
+          (array-set arr i (f el)))))))
 
 ;; todo: escape double quotes
 (impl pr-str String
@@ -94,41 +114,31 @@
             (concat-str "/" nm))
           nm)))))
 
-(def :map!
-  (fn {:params [f coll _]}
-    (let [cnt (count coll)]
-      (if (Int$value cnt)
-        (to-seq
-          (for-each coll (array cnt)
-            (fn {:params [el accum i _] :scope [f]}
-              (array-set accum i (f el)))))
-        ()))))
-
 (impl to-str Vector
   (fn {:params [vec _]}
-    (let [cnt (Int$value (count vec))
-          n (Int$new (i64/sub cnt (Int$value 1)))]
-      (if cnt
+    (let [cnt (count vec)
+          n (- cnt 1)]
+      (if (> cnt 0)
         (for-each vec "["
           (fn {:params [el accum i _] :scope [n]}
             (let [accum (concat-str accum (pr-str el))]
-              (if (i64/lt_u (Int$value i) (Int$value n))
+              (if (< i n)
                 (concat-str accum " ")
                 (concat-str accum "]")))))
         "[]"))))
 
 (impl to-str HashMap
   (fn {:params [m _]}
-    (let [cnt (Int$value (count m))
-          n (Int$new (i64/sub cnt (Int$value 1)))]
-      (if cnt
+    (let [cnt (count m)
+          n (- cnt 1)]
+      (if (> cnt 0)
         (for-each m "{"
           (fn {:params [kv accum i _] :scope [n]}
             (let [k (pr-str (LeafNode$key kv))
                   accum (concat-str (concat-str accum k) " ")
                   v (pr-str (LeafNode$val kv))
                   accum (concat-str accum v)]
-              (if (i64/lt_u (Int$value i) (Int$value n))
+              (if (< i n)
                 (concat-str accum " ")
                 (concat-str accum "}")))))
         "{}"))))
@@ -139,13 +149,13 @@
 
 (impl to-str Seq
   (fn {:params [seq _]}
-    (let [cnt (Int$value (count seq))]
-      (if cnt
-        (let [n (Int$new (i64/sub cnt (Int$value 1)))]
+    (let [cnt (count seq)]
+      (if (> cnt 0)
+        (let [n (- cnt 1)]
           (for-each seq "("
             (fn {:params [el accum i _] :scope [n]}
               (let [accum (concat-str accum (pr-str el))]
-                (if (i64/lt_u (Int$value i) (Int$value n))
+                (if (< i n)
                   (concat-str accum " ")
                   (concat-str accum ")"))))))
         "()"))))
@@ -155,9 +165,9 @@
 ;; todo: handle splicing-unquote
 (impl syntax-quote Seq
   (fn {:params [form _]}
-    (let [cnt (Int$value (count form))]
-      (if cnt
-        (let [accum (array (Int$new (i64/add cnt (Int$value 1))))]
+    (let [cnt (count form)]
+      (if (> cnt 0)
+        (let [accum (array (+ cnt 1))]
           (to-seq
             (for-each form
               (array-set accum 0 (symbol nil "list"))
@@ -169,9 +179,7 @@
                                false)
                            (nth el 1 nil)
                            (syntax-quote el))]
-                  (array-set accum
-                    (Int$new (i64/add (Int$value i) (Int$value 1)))
-                    el))))))
+                  (array-set accum (+ i 1) el))))))
        ()))))
 
 (impl syntax-quote Vector
@@ -180,58 +188,10 @@
       (symbol nil "to-vec")
       (syntax-quote (to-seq vec)))))
 
-(def :not
-  (fn {:params [x _]}
-    (if (eq x false)
-      true
-      (if (eq x nil)
-        true
-        false))))
-
-(def :+
-  (fn {:params [x y _]}
-    (Int$new
-      (i64/add
-        (Int$value x)
-        (Int$value y)))))
-
-(def :inc (fn {:params [x _]} (+ x 1)))
-
-(def :-
-  (fn {:params [x y _]}
-    (Int$new
-      (i64/sub
-        (Int$value x)
-        (Int$value y)))))
-
-(def :dec (fn {:params [x _]} (- x 1)))
-
-(def :*
-  (fn {:params [x y _]}
-    (Int$new
-      (i64/mul
-        (Int$value x)
-        (Int$value y)))))
-
-(def :<
-  (fn {:params [x y _]}
-    (if (i64/lt_u (Int$value x) (Int$value y))
-      true
-      false)))
-
-(def :>
-  (fn {:params [x y _]}
-    (if (i64/gt_u (Int$value x) (Int$value y))
-      true
-      false)))
-
 (def :string-ends-with
   (fn {:params [string substring _]}
     (string-matches-at string substring
-      (Int$new
-        (i64/sub
-          (Int$value (String$length string))
-          (Int$value (String$length substring)))))))
+      (- (String$length string) (String$length substring)))))
 
 (def :gensym-counter (atom 0))
 
@@ -255,7 +215,7 @@
 
 (impl expand-form Seq
   (fn {:params [form env]}
-    (if (Int$value (count form))
+    (if (> (count form) 0)
       (let [head (first form)
             tail (rest form)
             special
@@ -263,7 +223,7 @@
                 (if (eq head (symbol nil "syntax-quote"))
                   (let [gensym-num (deref gensym-counter)
                         form (syntax-quote (first tail))]
-                    (do (reset! gensym-counter (inc gensym-num))
+                    (do (reset! gensym-counter (+ gensym-num 1))
                         (call-mtd expand-form form env)))
                   (let [head (call-mtd expand-form head env)
                         special (get (deref special-forms) head nil)]
@@ -358,6 +318,7 @@
           (list 'def 'kw
             (call-mtd expand-form (nth args 1 nil) env)))))))
 
+(pr {:a 1 :b 2})
 (pr `x#)
 (pr `1)
 (pr `a)
@@ -372,21 +333,21 @@
 (pr (concat-str "a" "b"))
 (pr [1 2 3])
 (pr '(1 2 3))
-(pr (map! inc [4 5 6]))
+;(pr (map! inc [4 5 6]))
 (pr (comp.core/or 17 "this should not print"))
 (pr (comp.core/or nil "this should print"))
 
-;(impl expand-form Symbol
-;  (fn {:params [s env]}
-;    ;(get (deref aliases) s s)))
-;    (let [ss (get (deref aliases) s nil)]
-;      (if ss
-;        ss
-;        (if ss
-;          (call-mtd expand-form ss env)
-;          s)))))
-;          ;(throw s
-;          ;  (concat-str "symbol not found: " (to-str s))))))))
-;
-;(compile)
-;
+(impl expand-form Symbol
+  (fn {:params [s env]}
+    ;(get (deref aliases) s s)))
+    (let [ss (get (deref aliases) s nil)]
+      (if ss
+        ss
+        (if ss
+          (call-mtd expand-form ss env)
+          s)))))
+          ;(throw s
+          ;  (concat-str "symbol not found: " (to-str s))))))))
+
+(compile)
+
