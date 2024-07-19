@@ -2556,7 +2556,7 @@ function define_type (type_name, xpt_constr, ...fields) {
       const res = comp_type === wasm[field_type] ? comp_type : wasm.i32;
       store_func_for_comp(
         [wasm.i32], res, acc_func, {
-          comp: [`comp.${type_name}`, field_name],
+          comp: `${type_name}$${field_name}`,
 	  comp_wrapper: comp_type === wasm[field_type] || [wrap_result_i32_to_int]
         }
       );
@@ -2579,7 +2579,7 @@ function define_type (type_name, xpt_constr, ...fields) {
     params: params
   };
   store_func_for_comp(
-    params, wasm.i32, outer_func, { comp: [`comp.${type_name}`, "new"] }
+    params, wasm.i32, outer_func, { comp: `${type_name}$new` }
   );
   type_info.size = type_size;
 }
@@ -7575,7 +7575,7 @@ to_vec.implement(types.HashMapSeq, seq_to_vec);
 const keyword_store = new_atom(empty_hash_map),
       keywords = {};
 
-// todo: comp function should automatically pass 1 for do_free
+// todo: merge keyword & symbol stores
 const keyword = funcs.build(
   [wasm.i32, wasm.i32, wasm.i32], [wasm.i32],
   { export: "keyword", comp: "keyword" },
@@ -7694,19 +7694,15 @@ const symbol = funcs.build(
   }
 );
 
-function make_symbol (ns, nm) {
+const make_symbol = function (ns, nm) {
   if (typeof nm === "string") {
+    ns = cached_string(ns);
     nm = cached_string(nm);
-    if (typeof ns === "string") {
-      ns = cached_string(ns);
-    } else {
-      ns = 0;
-    }
   } else {
     nm = cached_string(ns);
     ns = 0;
   }
-  return comp.Symbol(comp.inc_refs(ns), comp.inc_refs(nm));
+  return comp.Symbol(0, nm);
 }
 
 compile();
@@ -8096,7 +8092,7 @@ for (const type_name in types) {
   const pred = pre_new_method(
     1, 0, 0, wasm.i32,
     {
-      comp: [`comp.${type_name}`, "instance"],
+      comp: `${type_name}$instance`,
       comp_wrapper: [wrap_result_i32_to_bool]
     },
     () => [wasm.i32$const, 0]
@@ -8236,7 +8232,7 @@ function new_method (num_args, result, opts, def_func) {
   if (nm instanceof Array) {
     nm = make_keyword(nm[0], nm[1]);
   } else if (nm) {
-    nm = make_keyword("comp", nm);
+    nm = make_keyword(nm);
   }
   if (opts.comp) comp.store_binding(nm, mtd, global_env);
   return out;
@@ -8435,7 +8431,7 @@ const comp_atom = funcs.build(
 // todo: why not store main_func and def_func as Functions?
 funcs.build(
   [wasm.i32, wasm.i32, wasm.i32], [wasm.i32],
-  { comp: "defmethod" },
+  { comp: ["comp", "defmethod"] },
   function (mtd_name, num_args, def_func) {
     const mtd = this.local(wasm.i32),
           mtd_func = this.local(wasm.i32),
@@ -8650,7 +8646,6 @@ funcs.build(
       wasm.local$set, ...param_num,
       wasm.local$set, ...outer_constr,
       wasm.local$get, ...type_name,
-// todo: should be namespaced
       wasm.i32$const, ...sleb128i32(cached_string("new")),
       wasm.i32$const, 1,
       wasm.call, ...keyword.uleb128,
@@ -9614,7 +9609,7 @@ const add_scope = funcs.build(
       wasm.call, ...count.uleb128,
       wasm.local$tee, ...cnt,
       wasm.if, wasm.void,
-        wasm.i32$const, ...sleb128i32(make_symbol("comp", "list")),
+        wasm.i32$const, ...sleb128i32(make_symbol("list")),
         wasm.local$get, ...scope,
         wasm.call, ...cons.uleb128,
         wasm.local$get, ...outer_func,
@@ -9822,9 +9817,9 @@ const comp_func_set_params = funcs.build(
 
 let special_forms = empty_hash_map;
 
-function def_special_form (nm, fn) {
+function def_special_form (ns, nm, fn) {
   const sf = special_forms,
-        sym = make_symbol("comp", nm);
+        sym = make_symbol(ns, nm);
   if (fn instanceof Function) fn = funcs.build(
     [wasm.i32, wasm.i32, wasm.i32], [wasm.i32], {}, fn
   );
@@ -10007,7 +10002,7 @@ const emit_func_call = funcs.build(
   }
 );
 
-def_special_form("list", function (fn, args, env) {
+def_special_form(0, "list", function (fn, args, env) {
   const cnt = this.local(wasm.i32),
         idx = this.local(wasm.i32);
   return [
@@ -10063,7 +10058,7 @@ def_special_form("list", function (fn, args, env) {
   ];
 });
 
-def_special_form("call-mtd", function (fn, args, env) {
+def_special_form(0, "call-mtd", function (fn, args, env) {
   return [
     wasm.local$get, ...fn,
     wasm.local$get, ...env,
@@ -10077,16 +10072,9 @@ def_special_form("call-mtd", function (fn, args, env) {
   ];
 });
 
-def_special_form("compile", function (fn, args, env) {
+def_special_form(0, "compile", function (fn, args, env) {
   const compile_flag = this.local(wasm.i32);
   return [
-	  //wasm.i32$const, ...sleb128i32(special_forms),
-	//  wasm.i32$const, nil,
-	//  wasm.i32$const, ...sleb128i32(js_string_to_comp("list")),
-        //  wasm.call, ...symbol.uleb128,
-	//	  wasm.i32$const, nil,
-	//	  wasm.call, ...get.uleb128,
-	//	  wasm.call, ...print_i32.uleb128,
     wasm.local$get, ...env,
     wasm.i32$const, ...sleb128i32(make_keyword("compile")),
     wasm.i32$const, nil,
@@ -10108,7 +10096,7 @@ def_special_form("compile", function (fn, args, env) {
   ];
 });
 
-def_special_form("let", function (func, forms, env) {
+def_special_form(0, "let", function (func, forms, env) {
   const bdgs = this.local(wasm.i32),
         bdgs_cnt = this.local(wasm.i32),
         bdg_idx = this.local(wasm.i32);
@@ -10436,7 +10424,7 @@ const revert_local_free = funcs.build(
   }
 );
 
-def_special_form("fn", function (func, form, env) {
+def_special_form(0, "fn", function (func, form, env) {
   const inner_env = this.local(wasm.i32),
         name = this.local(wasm.i32),
         config = this.local(wasm.i32),
@@ -10656,7 +10644,7 @@ const inc_loop_depth = funcs.build(
 );
 
 // todo: needs full review
-def_special_form("loop", function (func, forms, env) {
+def_special_form(0, "loop", function (func, forms, env) {
   const to_revert_arr = this.local(wasm.i32),
         to_revert_len = this.local(wasm.i32),
         return_type = this.local(wasm.i32),
@@ -10758,7 +10746,7 @@ const to_bool_i32 = funcs.build(
   }
 );
 
-def_special_form("if", function (func, forms, env) {
+def_special_form(0, "if", function (func, forms, env) {
   const result1 = this.local(wasm.i32),
         result2 = this.local(wasm.i32);
   return [
@@ -10882,7 +10870,7 @@ def_special_form("if", function (func, forms, env) {
   ];
 });
 
-// def_special_form("try", function (func) {
+// def_special_form(0, "try", function (func) {
 //   const fn = func.param(wasm.i32),
 //         forms = func.param(wasm.i32),
 //         env = func.param(wasm.i32);
@@ -10898,7 +10886,7 @@ def_special_form("if", function (func, forms, env) {
 //   );
 // });
 
-def_special_form("throw", function (func, forms, env) {
+def_special_form(0, "throw", function (func, forms, env) {
   return [
     wasm.local$get, ...forms,
     wasm.call, ...first.uleb128,
@@ -10934,7 +10922,7 @@ def_special_form("throw", function (func, forms, env) {
   ];
 });
 
-def_special_form("set-local", function (func, forms, env) {
+def_special_form(0, "set-local", function (func, forms, env) {
   const loc_num = this.local(wasm.i32),
         val = this.local(wasm.i32),
         result = this.local(wasm.i32);
@@ -10988,7 +10976,7 @@ def_special_form("set-local", function (func, forms, env) {
   ];
 });
 
-def_special_form("recur", function (func, forms, env) {
+def_special_form(0, "recur", function (func, forms, env) {
   return [
     wasm.local$get, ...func,
     wasm.local$get, ...env,
@@ -11010,7 +10998,7 @@ def_special_form("recur", function (func, forms, env) {
   ];
 });
 
-def_special_form("Float$value", function (func, args, env) {
+def_special_form(0, "Float$value", function (func, args, env) {
   const num = this.local(wasm.i32),
         val = this.local(wasm.i64),
         cnt = this.local(wasm.i32);
@@ -11059,7 +11047,7 @@ def_special_form("Float$value", function (func, args, env) {
   ];
 });
 
-def_special_form("Int$value", function (func, args, env) {
+def_special_form(0, "Int$value", function (func, args, env) {
   const num = this.local(wasm.i32);
   return [
     wasm.local$get, ...args,
@@ -11085,7 +11073,7 @@ def_special_form("Int$value", function (func, args, env) {
   ];
 });
 
-def_special_form("do", function (func, forms, env) {
+def_special_form(0, "do", function (func, forms, env) {
   const result = this.local(wasm.i32);
   return [
     // prevent prematurely freeing original forms
@@ -11131,7 +11119,7 @@ def_special_form("do", function (func, forms, env) {
   ];
 });
 
-def_special_form("quote", function (func, forms, env) {
+def_special_form(0, "quote", function (func, forms, env) {
   return [
     wasm.local$get, ...forms,
     wasm.call, ...first.uleb128,
@@ -11158,16 +11146,6 @@ const emit_code_special_form = funcs.build(
         wasm.call, ...get.uleb128,
         wasm.local$tee, ...hdl,
         wasm.if, wasm.i32,
-	    //wasm.local$get, ...head,
-	    //wasm.call, ...types.Symbol.fields.namespace.uleb128,
-	    //wasm.if, wasm.void,
-	    //wasm.local$get, ...head,
-	    //wasm.call, ...types.Symbol.fields.name.uleb128,
-	    //wasm.call, ...print_string.uleb128,
-	    //wasm.local$get, ...head,
-	    //wasm.call, ...types.Symbol.fields.namespace.uleb128,
-	    //wasm.call, ...print_string.uleb128,
-	    //wasm.end,
           wasm.local$get, ...func,
           wasm.local$get, ...args,
           wasm.local$get, ...env,
@@ -11176,19 +11154,6 @@ const emit_code_special_form = funcs.build(
           wasm.call_indirect,
           ...sleb128i32(get_type_idx(3, 0, 0, wasm.i32)), 0,
         wasm.else,
-	    //wasm.local$get, ...head,
-	    //wasm.call, ...types.Symbol.fields.namespace.uleb128,
-	    //wasm.local$tee, ...head,
-	    //wasm.if, wasm.void,
-	    //wasm.i32$const, ...sleb128i32(js_string_to_comp("call-mtd")),
-	    //wasm.i32$const, ...sleb128i32(js_string_to_comp("call-mtd")),
-	    //wasm.call, ...eq.uleb128,
-	    //wasm.i32$const, ...sleb128i32(js_string_to_comp("comp")),
-	    //wasm.i32$const, ...sleb128i32(js_string_to_comp("comp")),
-	    //wasm.call, ...eq.uleb128,
-	    //wasm.i32$and,
-	    //wasm.call, ...print_i32.uleb128,
-            //wasm.end,
           wasm.i32$const, 0,
         wasm.end,
       wasm.else,
@@ -12250,7 +12215,7 @@ literal_tagged_data.implement(types.Int, function (int) {
     wasm.i32$const, 2,
     wasm.call, ...refs_array_by_length.uleb128,
     wasm.i32$const, 0,
-    wasm.i32$const, ...sleb128i32(make_symbol("comp.Int", "value")),
+    wasm.i32$const, ...sleb128i32(make_symbol("Int$value")),
     wasm.call, ...refs_array_set.uleb128,
     wasm.i32$const, 1,
     wasm.local$get, ...int,
@@ -12265,7 +12230,7 @@ literal_tagged_data.implement(types.Float, function (flt) {
     wasm.i32$const, 2,
     wasm.call, ...refs_array_by_length.uleb128,
     wasm.i32$const, 0,
-    wasm.i32$const, ...sleb128i32(make_symbol("comp.Float", "value")),
+    wasm.i32$const, ...sleb128i32(make_symbol("Float$value")),
     wasm.call, ...refs_array_set.uleb128,
     wasm.i32$const, 1,
     wasm.local$get, ...flt,
@@ -13020,7 +12985,7 @@ read_form.build(function (str, idx, lineno) {
               wasm.local$get, ...str,
               wasm.local$get, ...idx,
               wasm.local$get, ...lineno,
-              wasm.i32$const, ...sleb128i32(cached_string("comp")),
+              wasm.i32$const, nil,
               wasm.i32$const, ...sleb128i32(cached_string("quote")),
               wasm.call, ...symbol.uleb128,
               // wasm.i32$const, ...sleb128i32(make_symbol("quote")),
@@ -13033,7 +12998,7 @@ read_form.build(function (str, idx, lineno) {
               wasm.local$get, ...str,
               wasm.local$get, ...idx,
               wasm.local$get, ...lineno,
-              wasm.i32$const, ...sleb128i32(cached_string("comp")),
+              wasm.i32$const, nil,
               wasm.i32$const, ...sleb128i32(cached_string("syntax-quote")),
               wasm.call, ...symbol.uleb128,
               // wasm.i32$const, ...sleb128i32(make_symbol("syntax-quote")),
@@ -13046,7 +13011,7 @@ read_form.build(function (str, idx, lineno) {
               wasm.local$get, ...str,
               wasm.local$get, ...idx,
               wasm.local$get, ...lineno,
-              wasm.i32$const, ...sleb128i32(cached_string("comp")),
+              wasm.i32$const, nil,
               wasm.i32$const, ...sleb128i32(cached_string("unquote")),
               wasm.call, ...symbol.uleb128,
               // wasm.i32$const, ...sleb128i32(make_symbol("unquote")),
@@ -13155,7 +13120,7 @@ while (funcs.comp.length) {
   if (nm instanceof Array) {
     nm = make_keyword(nm[0], nm[1]);
   } else {
-    nm = make_keyword("comp", nm);
+    nm = make_keyword(nm);
   }
   comp.store_comp_func(nm, ...rest);
 }
