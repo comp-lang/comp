@@ -207,7 +207,8 @@
   (comp/fn {:params [sym _]}
     (comp/let
       [ns (comp.Symbol/namespace sym)
-       nm (comp.Symbol/name sym)
+       ns (comp/if ns (comp/force-to-string ns) ns)
+       nm (comp/force-to-string (comp.Symbol/name sym))
        nm (comp/if ns nm
             (comp/if (comp/string-ends-with nm "#")
               (comp/concat-str
@@ -333,27 +334,18 @@
             (comp/call-mtd comp/expand-form
               (comp/nth args 1 nil) env)))))))
 
-;(comp/let [m (comp/assoc {} 'list 1)
-;      m (comp/assoc m 'comp/comp/call-mtd 2)
-;      m (comp/assoc m 'compile 3)
-;      m (comp/assoc m 'let 4)
-;      m (comp/assoc m 'fn 5)
-;      m (comp/assoc m 'loop 6)
-;      m (comp/assoc m 'if 5)
-;      m (comp/assoc m 'throw 5)
-;      ]
-;  (comp/pr m))
 (comp/pr {:a 1 :b 2})
 (comp/pr `x#)
 (comp/pr `1)
 (comp/pr `a)
 (comp/pr `(a))
 (comp/pr `(1 (2 3)))
-(comp/pr (comp/string-length "abc"))
+(comp/pr (comp/count "abc"))
 (comp/pr (comp/substring "abcd" 1 3))
 (comp/pr (comp/index-of-codepoint "abcd" 99))
-(comp/pr (comp/hash "abc"))
+(comp/pr (comp/hash "comp/fn"))
 (comp/pr (comp/eq 1 2))
+(comp/pr (comp/eq 3 3))
 (comp/pr (comp/concat-str "a" "b"))
 (comp/pr [1 2 3])
 (comp/pr '(1 2 3))

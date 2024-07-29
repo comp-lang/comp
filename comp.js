@@ -1152,7 +1152,8 @@ const get_type_idx = import_func(
 const print_i32 = import_func(
   1, 0, 0, [],
   function (i32) {
-    console.log(i32);
+    const a = new Uint32Array([i32]);
+    console.log(a[0]);
   }
 );
 
@@ -1880,6 +1881,7 @@ begin_package();
 |                |
 \*--------------*/
 
+// todo: make method for fileslice & string
 function comp_string_to_js (addr) {
   const len = comp.String$length(addr),
         arr = comp.String$arr(addr),
@@ -1890,6 +1892,7 @@ function comp_string_to_js (addr) {
 const store_string = import_func(
   1, 0, 0, [wasm.i32],
   function (str) {
+// todo: use abovementioned method
     return store_ref(comp_string_to_js(str));
   }
 );
@@ -1924,23 +1927,45 @@ const file_close = import_func(
   }
 );
 
-const file_length = import_func(
-  1, 0, 0, [wasm.i32],
-  function (fstr) {
-    const fd = comp.File$fd(fstr);
-    return fs.fstatSync(fd).size;
+// todo: make sure idx < len
+const file_read_byte = import_func(
+  2, 0, 0, [wasm.i32],
+  function (file, idx) {
+    const buf = new Uint8Array(1);
+    fs.readSync(comp.File$fd(file), buf, 0, 1, idx);
+    return buf[0];
+  }
+);
+
+// todo: make sure idx < len
+const file_read_i32 = import_func(
+  2, 0, 0, [wasm.i32],
+  function (file, idx) {
+    const buf = new Uint32Array(1);
+    fs.readSync(comp.File$fd(file), buf, 0, 4, idx);
+    return buf[0];
+  }
+);
+
+// todo: make sure idx < len
+const file_read_i64 = import_func(
+  2, 0, 0, [wasm.i64],
+  function (file, idx) {
+    const buf = new BigInt64Array(1);
+    fs.readSync(comp.File$fd(file), buf, 0, 8, idx);
+    return buf[0];
   }
 );
 
 const file_get_string_chunk = import_func(
-  3, 0, 0, [wasm.i32],
-  function (fstr, start, len) {
-    const arr = comp.array_by_length(Math.ceil(len / 4)),
+  4, 0, 0, [wasm.i32],
+  function (fstr, str, start, len) {
+    const arr = comp.String$arr(str),
 // todo: update global DataView when memory grows
           buf = new DataView(memory.buffer),
           fd = comp.File$fd(fstr),
           br = fs.readSync(fd, buf, comp.Array$arr(arr), len, start);
-    return comp.String(arr, br);
+    return str;
   }
 );
 
@@ -2621,7 +2646,17 @@ define_type(
   "File", 1,
   "refs", "i32", 1, refs_default, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
-  "fd", "i32", 0, 0, wasm.i64, 1
+  "fd", "i32", 0, 0, wasm.i64, 1,
+  "length", "i32", 0, 0, 0, 0,
+);
+
+define_type(
+  "FileSlice", 1,
+  "refs", "i32", 1, refs_default, 0, 0,
+  "hash", "i32", 1, 0, 0, 0,
+  "file", "i32", 0, 0, 0, 0,
+  "start", "i32", 0, 0, 0, 0,
+  "length", "i32", 0, 0, 0, 0,
 );
 
 define_type(
@@ -4376,37 +4411,69 @@ impl_free(types.String, function (free_self) {
 });
 
 impl_free(types.File, function (free_self) {
-  const fstr = [0];
+  const file = [0];
   return [
-    wasm.local$get, ...fstr,
+    wasm.local$get, ...file,
     wasm.call, ...file_close.uleb128,
     ...free_self
   ];
 });
 
-const string_length = pre_new_method(
-  1, 0, 0, wasm.i32,
-  {
-    comp: "string-length",
-    comp_wrapper: [wrap_result_i32_to_int]
-  }
-);
-
-string_length.implement(types.String, types.String.fields.length.func_idx);
-string_length.implement(types.File, file_length.func_idx);
-
-// converts segment of File to String in situations when
-// we wouldn't need to call substring on a String
-const get_string_chunk = pre_new_method(3, 0, 0, wasm.i32, {});
-
-get_string_chunk.implement(types.String, function (str) {
+impl_free(types.FileSlice, function (free_self) {
   return [
-    wasm.local$get, ...str,
-    wasm.call, ...inc_refs.uleb128
+    wasm.local$get, 0,
+    wasm.call, ...types.FileSlice.fields.file.uleb128,
+    wasm.call, ...free.uleb128,
+    ...free_self
   ];
 });
 
-get_string_chunk.implement(types.File, file_get_string_chunk.func_idx);
+const is_string_like = pre_new_method(
+  1, 0, 0, wasm.i32, {}, () => [wasm.i32$const, 0]
+);
+
+is_string_like.implement(types.String, () => [wasm.i32$const, 1]);
+is_string_like.implement(types.FileSlice, () => [wasm.i32$const, 1]);
+
+const empty_string = funcs.build(
+  [wasm.i32], [wasm.i32], {},
+  function (len) {
+    return [
+      wasm.local$get, ...len,
+      wasm.i32$const, 4,
+      wasm.call, ...i32_div_ceil.uleb128,
+      wasm.call, ...array_by_length.uleb128,
+      wasm.local$get, ...len,
+      wasm.call, ...types.String.constr.uleb128,
+    ];
+  }
+);
+
+const force_to_string = pre_new_method(1, 0, 0, wasm.i32, {
+  comp: "force-to-string"
+});
+
+force_to_string.implement(types.FileSlice, function (fsl) {
+  const len = this.local(wasm.i32);
+  return [
+    wasm.local$get, ...fsl,
+    wasm.call, ...types.FileSlice.fields.file.uleb128,
+    wasm.local$get, ...fsl,
+    wasm.call, ...types.FileSlice.fields.length.uleb128,
+    wasm.local$tee, ...len,
+    wasm.call, ...empty_string.uleb128,
+    wasm.local$get, ...fsl,
+    wasm.call, ...types.FileSlice.fields.start.uleb128,
+    wasm.local$get, ...len,
+    wasm.call, ...file_get_string_chunk.uleb128
+  ];
+});
+
+force_to_string.implement(types.String, function (str) {
+  return [
+    wasm.local$get, ...str
+  ];
+});
 
 const substring = pre_new_method(
   3, 0, 0, wasm.i32, {
@@ -4430,7 +4497,19 @@ substring.implement(types.String, function (str, start, len) {
   ];
 });
 
-substring.implement(types.File, file_get_string_chunk.func_idx);
+substring.implement(types.FileSlice, function (fsl, start, len) {
+  return [
+    wasm.local$get, ...fsl,
+    wasm.call, ...types.FileSlice.fields.file.uleb128,
+    wasm.call, ...inc_refs.uleb128,
+    wasm.local$get, ...start,
+    wasm.local$get, ...fsl,
+    wasm.call, ...types.FileSlice.fields.start.uleb128,
+    wasm.i32$add,
+    wasm.local$get, ...len,
+    wasm.call, ...types.FileSlice.constr.uleb128
+  ];
+});
 
 const substring_to_end = funcs.build(
   [wasm.i32, wasm.i32], [wasm.i32],
@@ -4443,7 +4522,7 @@ const substring_to_end = funcs.build(
       wasm.local$get, ...str,
       wasm.local$get, ...idx,
       wasm.local$get, ...str,
-      wasm.call, ...types.String.fields.length.uleb128,
+      wasm.call, ...count.uleb128,
       wasm.local$get, ...idx,
       wasm.i32$sub,
       wasm.call, ...substring.uleb128
@@ -4470,11 +4549,83 @@ const substring_until = funcs.build(
   }
 );
 
+const get_string_byte = pre_new_method(2, 0, 0, wasm.i32, {});
+
+get_string_byte.implement(types.String, function (str, idx) {
+  return [
+    wasm.local$get, ...str,
+    wasm.call, ...types.String.fields.arr.uleb128,
+    wasm.local$get, ...idx,
+    wasm.call, ...array_get_i8.uleb128,
+  ];
+});
+
+get_string_byte.implement(types.FileSlice, function (fsl, idx) {
+  return [
+    wasm.local$get, ...fsl,
+    wasm.call, ...types.FileSlice.fields.file.uleb128,
+    wasm.local$get, ...fsl,
+    wasm.call, ...types.FileSlice.fields.start.uleb128,
+    wasm.local$get, ...idx,
+    wasm.i32$add,
+    wasm.call, ...file_read_byte.uleb128,
+  ];
+});
+
+const get_string_i32 = pre_new_method(2, 0, 0, wasm.i32, {});
+
+get_string_i32.implement(types.String, function (str, idx) {
+  return [
+    wasm.local$get, ...str,
+    wasm.call, ...types.String.fields.arr.uleb128,
+    wasm.local$get, ...idx,
+    wasm.call, ...array_get_i32.uleb128,
+  ];
+});
+
+get_string_i32.implement(types.FileSlice, function (fsl, idx) {
+  return [
+    wasm.local$get, ...fsl,
+    wasm.call, ...types.FileSlice.fields.file.uleb128,
+    wasm.local$get, ...idx,
+    wasm.i32$const, 2,
+    wasm.i32$shl,
+    wasm.local$get, ...fsl,
+    wasm.call, ...types.FileSlice.fields.start.uleb128,
+    wasm.i32$add,
+    wasm.call, ...file_read_i32.uleb128,
+  ];
+});
+
+const get_string_i64 = pre_new_method(2, 0, 0, wasm.i64, {});
+
+get_string_i64.implement(types.String, function (str, idx) {
+  return [
+    wasm.local$get, ...str,
+    wasm.call, ...types.String.fields.arr.uleb128,
+    wasm.local$get, ...idx,
+    wasm.call, ...array_get_i64.uleb128
+  ];
+});
+
+get_string_i64.implement(types.FileSlice, function (fsl, idx) {
+  return [
+    wasm.local$get, ...fsl,
+    wasm.call, ...types.FileSlice.fields.file.uleb128,
+    wasm.local$get, ...idx,
+    wasm.i32$const, 3,
+    wasm.i32$shl,
+    wasm.local$get, ...fsl,
+    wasm.call, ...types.FileSlice.fields.start.uleb128,
+    wasm.i32$add,
+    wasm.call, ...file_read_i64.uleb128,
+  ];
+});
+
 const get_codepoint = funcs.build(
   [wasm.i32, wasm.i32], [wasm.i32, wasm.i32], {},
   function (str, idx) {
-    const arr = this.local(wasm.i32),
-          org = this.local(wasm.i32),
+    const org = this.local(wasm.i32),
           len = this.local(wasm.i32),
           num_bytes = this.local(wasm.i32),
           byt = this.local(wasm.i32),
@@ -4486,23 +4637,22 @@ const get_codepoint = funcs.build(
       wasm.local$get, ...idx,
       wasm.local$tee, ...org,
       wasm.local$get, ...str,
-      wasm.call, ...string_length.uleb128,
+      wasm.call, ...count.uleb128,
       wasm.local$tee, ...len,
       wasm.i32$lt_u,
       wasm.local$get, ...str,
       wasm.local$get, ...idx,
       wasm.i32$const, 4,
+// todo: don't substring
       // this converts file to string
       wasm.call, ...substring.uleb128,
-      wasm.local$tee, ...str,
-      wasm.call, ...types.String.fields.arr.uleb128,
-      wasm.local$set, ...arr,
+      wasm.local$set, ...str,
       wasm.i32$const, 0,
       wasm.local$set, ...idx,
       wasm.if, wasm.void,
-        wasm.local$get, ...arr,
+        wasm.local$get, ...str,
         wasm.local$get, ...idx,
-        wasm.call, ...array_get_i8.uleb128,
+        wasm.call, ...get_string_byte.uleb128,
         wasm.local$tee, ...byt,
         wasm.i32$const, ...sleb128i32(128),
         wasm.i32$lt_u,
@@ -4570,12 +4720,12 @@ const get_codepoint = funcs.build(
                 wasm.local$get, ...chr,
                 wasm.i32$const, 6,
                 wasm.i32$shl,
-                wasm.local$get, ...arr,
+                wasm.local$get, ...str,
                 wasm.local$get, ...idx,
                 wasm.i32$const, 1,
                 wasm.i32$add,
                 wasm.local$tee, ...idx,
-                wasm.call, ...array_get_i8.uleb128,
+                wasm.call, ...get_string_byte.uleb128,
                 wasm.i32$const, 0b00111111,
                 wasm.i32$and,
                 wasm.i32$or,
@@ -4605,6 +4755,21 @@ const get_codepoint = funcs.build(
   }
 );
 
+count.implement(types.FileSlice, function (fsl) {
+  return [
+    wasm.local$get, ...fsl,
+    wasm.call, ...types.FileSlice.fields.length.uleb128
+  ];
+});
+
+count.implement(types.String, function (str) {
+  return [
+    wasm.local$get, ...str,
+    wasm.call, ...types.String.fields.length.uleb128
+  ];
+});
+
+// todo: change to function, use methods internally
 const index_of_codepoint = pre_new_method(
   2, 0, 0, wasm.i32, {
     comp: "index-of-codepoint",
@@ -4624,7 +4789,7 @@ index_of_codepoint.implement(types.String, function (str, cdp) {
     wasm.i32$const, ...sleb128i32(-1),
     wasm.local$set, ...out,
     wasm.local$get, ...str,
-    wasm.call, ...types.String.fields.length.uleb128,
+    wasm.call, ...count.uleb128,
     wasm.local$set, ...len,
     wasm.loop, wasm.void,
       wasm.local$get, ...idx,
@@ -4651,19 +4816,38 @@ index_of_codepoint.implement(types.String, function (str, cdp) {
   ];
 });
 
-const new_string = funcs.build(
-  [wasm.i32], [wasm.i32], {},
-  function (len) {
-    return [
-      wasm.local$get, ...len,
-      wasm.i32$const, 4,
-      wasm.call, ...i32_div_ceil.uleb128,
-      wasm.call, ...array_by_length.uleb128,
-      wasm.local$get, ...len,
-      wasm.call, ...types.String.constr.uleb128,
-    ];
-  }
-);
+const copy_string = pre_new_method(4, 0, 0, 0, {});
+
+copy_string.implement(types.String, function (src, dst, off, len) {
+  return [
+    wasm.local$get, ...dst,
+    wasm.call, ...types.String.fields.arr.uleb128,
+    wasm.call, ...types.Array.fields.arr.uleb128,
+    wasm.local$get, ...off,
+    wasm.i32$add,
+    wasm.local$get, ...src,
+    wasm.call, ...types.String.fields.arr.uleb128,
+    wasm.call, ...types.Array.fields.arr.uleb128,
+    wasm.local$get, ...len,
+    wasm.mem$prefix,
+    wasm.mem$copy, 0, 0,
+  ];
+});
+
+copy_string.implement(types.FileSlice, function (src, dst, off, len) {
+  return [
+    wasm.local$get, ...src,
+    wasm.call, ...types.FileSlice.fields.file.uleb128,
+    wasm.local$get, ...dst,
+    wasm.local$get, ...off,
+    wasm.local$get, ...src,
+    wasm.call, ...types.FileSlice.fields.start.uleb128,
+    wasm.i32$add,
+    wasm.local$get, ...len,
+    wasm.call, ...file_get_string_chunk.uleb128,
+    wasm.drop
+  ];
+});
 
 // todo: confirm str2 is string
 const concat_str = funcs.build(
@@ -4675,32 +4859,24 @@ const concat_str = funcs.build(
           out = this.local(wasm.i32);
     return [
       wasm.local$get, ...str1,
-      wasm.call, ...types.String.fields.length.uleb128,
+      wasm.call, ...count.uleb128,
       wasm.local$tee, ...len1,
       wasm.local$get, ...str2,
-      wasm.call, ...types.String.fields.length.uleb128,
+      wasm.call, ...count.uleb128,
       wasm.local$tee, ...len2,
       wasm.call, ...safe_add_i32.uleb128,
-      wasm.call, ...new_string.uleb128,
-      wasm.local$tee, ...out,
-      wasm.call, ...types.String.fields.arr.uleb128,
-      wasm.call, ...types.Array.fields.arr.uleb128,
-      wasm.local$tee, ...arr,
+      wasm.call, ...empty_string.uleb128,
+      wasm.local$set, ...out,
       wasm.local$get, ...str1,
-      wasm.call, ...types.String.fields.arr.uleb128,
-      wasm.call, ...types.Array.fields.arr.uleb128,
+      wasm.local$get, ...out,
+      wasm.i32$const, 0,
       wasm.local$get, ...len1,
-      wasm.mem$prefix,
-      wasm.mem$copy, 0, 0,
-      wasm.local$get, ...arr,
-      wasm.local$get, ...len1,
-      wasm.i32$add,
+      wasm.call, ...copy_string.uleb128,
       wasm.local$get, ...str2,
-      wasm.call, ...types.String.fields.arr.uleb128,
-      wasm.call, ...types.Array.fields.arr.uleb128,
+      wasm.local$get, ...out,
+      wasm.local$get, ...len1,
       wasm.local$get, ...len2,
-      wasm.mem$prefix,
-      wasm.mem$copy, 0, 0,
+      wasm.call, ...copy_string.uleb128,
       wasm.local$get, ...out
     ];
   }
@@ -5425,10 +5601,11 @@ const hash_combine = func_builder(function (func) {
 
 const hash_bytes = funcs.build(
   [wasm.i32, wasm.i32], [wasm.i32], {},
-  function (arr, len) {
+  function (str, len) {
     const cnt = this.local(wasm.i32),
           idx = this.local(wasm.i32),
-          hsh = this.local(wasm.i32);
+          hsh = this.local(wasm.i32),
+          rem = this.local(wasm.i32);
     return [
       wasm.local$get, ...len,
       wasm.i32$const, 2,
@@ -5440,9 +5617,9 @@ const hash_bytes = funcs.build(
         wasm.i32$lt_u,
         wasm.if, wasm.void,
           wasm.local$get, ...hsh,
-          wasm.local$get, ...arr,
+          wasm.local$get, ...str,
           wasm.local$get, ...idx,
-          wasm.call, ...array_get_i32.uleb128,
+          wasm.call, ...get_string_i32.uleb128,
           wasm.call, ...m3_mix_h.uleb128,
           wasm.local$set, ...hsh,
           wasm.local$get, ...idx,
@@ -5457,9 +5634,13 @@ const hash_bytes = funcs.build(
       wasm.i32$and,
       wasm.if, wasm.void,
         wasm.local$get, ...hsh,
-        wasm.local$get, ...arr,
+        wasm.local$get, ...str,
         wasm.local$get, ...cnt,
-        wasm.call, ...array_get_i32.uleb128,
+        wasm.call, ...get_string_i32.uleb128,
+        // file will continue past last byte,
+        // while string is zero filled
+        wasm.i32$const, 3,
+        wasm.i32$and,
         wasm.call, ...m3_mix_k.uleb128,
         wasm.local$set, ...hsh,
       wasm.end,
@@ -5476,6 +5657,7 @@ const hash_id = function (val) {
 
 const hash = pre_new_method(1, 0, 0, wasm.i32, {
   comp: "hash",
+  export: "hash",
   comp_wrapper: [wrap_result_i32_to_int]
 }, hash_id);
 
@@ -5531,20 +5713,21 @@ function caching_hash (...ops) {
         wasm.local$get, ...h,
         wasm.atomic$prefix,
         wasm.i32$atomic$store, 2, 0,
-      wasm.end
+      wasm.end,
+      wasm.local$tee, ...h,
     ];
   };
 }
 
 const hash_string = caching_hash(
   wasm.local$get, 0,
-  wasm.call, ...types.String.fields.arr.uleb128,
   wasm.local$get, 0,
-  wasm.call, ...types.String.fields.length.uleb128,
+  wasm.call, ...count.uleb128,
   wasm.call, ...hash_bytes.uleb128
 );
 
 hash.implement(types.String, hash_string);
+hash.implement(types.FileSlice, hash_string);
 
 // based on how Scala handles Tuple2
 function impl_hash_symkw (which) {
@@ -5585,62 +5768,31 @@ const string_matches = funcs.build(
           out = this.local(wasm.i32);
     return [
       wasm.local$get, ...str1,
-      wasm.call, ...types.String.fields.arr.uleb128,
-      wasm.local$set, ...str1,
+      wasm.call, ...count.uleb128,
       wasm.local$get, ...str2,
-      wasm.call, ...types.String.fields.length.uleb128,
+      wasm.call, ...count.uleb128,
       wasm.local$tee, ...len,
-      // divide by 8 because len is in bytes, but we will compare i64s
-      wasm.i32$const, 3,
-      wasm.i32$shr_u,
-      wasm.local$set, ...cnt,
-      wasm.local$get, ...str2,
-      wasm.call, ...types.String.fields.arr.uleb128,
-      wasm.local$set, ...str2,
-      wasm.i32$const, 1,
-      wasm.local$set, ...out,
-      wasm.loop, wasm.void,
-        wasm.local$get, ...idx,
-        wasm.local$get, ...cnt,
-        wasm.i32$lt_u,
-        wasm.if, wasm.void,
-          wasm.local$get, ...str1,
-          wasm.local$get, ...idx,
-          wasm.call, ...array_get_i64.uleb128,
-          wasm.local$get, ...str2,
-          wasm.local$get, ...idx,
-          wasm.call, ...array_get_i64.uleb128,
-          wasm.i64$eq,
-          wasm.if, wasm.void,
-            wasm.local$get, ...idx,
-            wasm.i32$const, 1,
-            wasm.i32$add,
-            wasm.local$set, ...idx,
-            wasm.br, 2,
-          wasm.else,
-            wasm.i32$const, 0,
-            wasm.local$set, ...out,
-          wasm.end,
-        wasm.end,
-      wasm.end,
-      wasm.local$get, ...out,
+      wasm.i32$ge_u,
       wasm.if, wasm.void,
-        wasm.local$get, ...idx,
+        wasm.local$get, ...len,
+        // divide by 8 because len is in bytes, but we will compare i64s
         wasm.i32$const, 3,
-        wasm.i32$shl,
-        wasm.local$set, ...idx,
+        wasm.i32$shr_u,
+        wasm.local$set, ...cnt,
+        wasm.i32$const, 1,
+        wasm.local$set, ...out,
         wasm.loop, wasm.void,
           wasm.local$get, ...idx,
-          wasm.local$get, ...len,
+          wasm.local$get, ...cnt,
           wasm.i32$lt_u,
           wasm.if, wasm.void,
             wasm.local$get, ...str1,
             wasm.local$get, ...idx,
-            wasm.call, ...array_get_i8.uleb128,
+            wasm.call, ...get_string_i64.uleb128,
             wasm.local$get, ...str2,
             wasm.local$get, ...idx,
-            wasm.call, ...array_get_i8.uleb128,
-            wasm.i32$eq,
+            wasm.call, ...get_string_i64.uleb128,
+            wasm.i64$eq,
             wasm.if, wasm.void,
               wasm.local$get, ...idx,
               wasm.i32$const, 1,
@@ -5650,6 +5802,37 @@ const string_matches = funcs.build(
             wasm.else,
               wasm.i32$const, 0,
               wasm.local$set, ...out,
+            wasm.end,
+          wasm.end,
+        wasm.end,
+        wasm.local$get, ...out,
+        wasm.if, wasm.void,
+          wasm.local$get, ...idx,
+          wasm.i32$const, 3,
+          wasm.i32$shl,
+          wasm.local$set, ...idx,
+          wasm.loop, wasm.void,
+            wasm.local$get, ...idx,
+            wasm.local$get, ...len,
+            wasm.i32$lt_u,
+            wasm.if, wasm.void,
+              wasm.local$get, ...str1,
+              wasm.local$get, ...idx,
+              wasm.call, ...get_string_byte.uleb128,
+              wasm.local$get, ...str2,
+              wasm.local$get, ...idx,
+              wasm.call, ...get_string_byte.uleb128,
+              wasm.i32$eq,
+              wasm.if, wasm.void,
+                wasm.local$get, ...idx,
+                wasm.i32$const, 1,
+                wasm.i32$add,
+                wasm.local$set, ...idx,
+                wasm.br, 2,
+              wasm.else,
+                wasm.i32$const, 0,
+                wasm.local$set, ...out,
+              wasm.end,
             wasm.end,
           wasm.end,
         wasm.end,
@@ -5671,11 +5854,11 @@ const string_matches_at = funcs.build(
     const len = this.local(wasm.i32);
     return [
       wasm.local$get, ...str,
-      wasm.call, ...string_length.uleb128,
+      wasm.call, ...count.uleb128,
       wasm.local$get, ...from,
       wasm.i32$sub,
       wasm.local$get, ...sbstr,
-      wasm.call, ...string_length.uleb128,
+      wasm.call, ...count.uleb128,
       wasm.local$tee, ...len,
       wasm.i32$ge_u,
       wasm.if, wasm.i32,
@@ -5685,9 +5868,9 @@ const string_matches_at = funcs.build(
         wasm.call, ...substring.uleb128,
         wasm.local$tee, ...str,
         wasm.local$get, ...sbstr,
-        wasm.local$get, ...from,
+        wasm.i32$const, 0,
         wasm.local$get, ...len,
-        wasm.call, ...get_string_chunk.uleb128,
+        wasm.call, ...substring.uleb128,
         wasm.local$tee, ...sbstr,
         wasm.call, ...string_matches.uleb128,
         wasm.local$get, ...sbstr,
@@ -5707,32 +5890,33 @@ const string_equiv = funcs.build(
     const len = this.local(wasm.i32);
     return [
       wasm.local$get, ...b,
-      wasm.i32$load, 2, 0,
-      wasm.i32$const, ...sleb128i32(types.String.type_num),
-      wasm.i32$eq,
+      wasm.call, ...is_string_like.uleb128,
       wasm.if, wasm.i32,
         wasm.local$get, ...a,
-        wasm.call, ...string_length.uleb128,
+        wasm.call, ...count.uleb128,
         wasm.local$tee, ...len,
         wasm.local$get, ...b,
-        wasm.call, ...string_length.uleb128,
+        wasm.call, ...count.uleb128,
         wasm.i32$eq,
         wasm.if, wasm.i32,
           wasm.local$get, ...a,
           wasm.i32$const, 0,
           wasm.local$get, ...len,
-          wasm.call, ...get_string_chunk.uleb128,
+          wasm.call, ...substring.uleb128,
           wasm.local$tee, ...a,
           wasm.local$get, ...b,
           wasm.i32$const, 0,
           wasm.local$get, ...len,
-          wasm.call, ...get_string_chunk.uleb128,
+          wasm.call, ...substring.uleb128,
           wasm.local$tee, ...b,
           wasm.call, ...string_matches.uleb128,
           wasm.local$get, ...a,
           wasm.call, ...free.uleb128,
           wasm.local$get, ...b,
           wasm.call, ...free.uleb128,
+	    //wasm.local$tee, ...a,
+	    //wasm.local$get, ...a,
+	    //wasm.call, ...print_i32.uleb128,
         wasm.else,
           wasm.i32$const, 0,
         wasm.end,
@@ -5783,7 +5967,7 @@ function hashed_equiv (equiv) {
 }
 
 equiv.implement(types.String, hashed_equiv(string_equiv));
-equiv.implement(types.File, hashed_equiv(string_equiv));
+equiv.implement(types.FileSlice, hashed_equiv(string_equiv));
 
 function equiv_by_field(type, field, op) {
   equiv.implement(type, function (a, b) {
@@ -7625,8 +7809,15 @@ const keyword = funcs.build(
         wasm.drop,
       wasm.else,
         wasm.local$get, ...namespace,
+        wasm.if, wasm.i32,
+          wasm.local$get, ...namespace,
+          wasm.call, ...force_to_string.uleb128,
+        wasm.else,
+          wasm.local$get, ...namespace,
+        wasm.end,
         wasm.call, ...inc_refs.uleb128,
         wasm.local$get, ...name,
+        wasm.call, ...force_to_string.uleb128,
         wasm.call, ...inc_refs.uleb128,
         wasm.call, ...types.Keyword.constr.uleb128,
         wasm.local$set, ...out,
@@ -7653,6 +7844,7 @@ const keyword = funcs.build(
 const sym_to_kw = funcs.build(
   [wasm.i32], [wasm.i32], {},
   function (sym) {
+    const ns = this.local(wasm.i32);
     return [
       wasm.local$get, ...sym,
       wasm.call, ...types.Symbol.fields.namespace.uleb128,
@@ -7717,150 +7909,152 @@ compile();
 |      |
 \*----*/
 
-const size = pre_new_method(1, 0, 0, wasm.i32, { export: "size" });
+// todo: need?
 
-size.implement(types.Nil, () => [wasm.i32$const, 4]);
-
-size.implement(types.Array, function (arr) {
-  return [
-    wasm.i32$const, ...sleb128i32(types.Array.size),
-    wasm.local$get, ...arr,
-    wasm.call, ...types.Array.fields.length.uleb128,
-    wasm.i32$add,
-    wasm.local$get, ...arr,
-    wasm.call, ...types.Array.fields.original.uleb128,
-    wasm.call, ...size.uleb128,
-    wasm.i32$add
-  ];
-});
-
-size.implement(types.String, function (str) {
-  return [
-    wasm.i32$const, ...sleb128i32(types.String.size),
-    wasm.local$get, ...str,
-    wasm.call, ...types.String.fields.arr.uleb128,
-    wasm.call, ...size.uleb128,
-    wasm.i32$add
-  ];
-});
-
-size.implement(types.Symbol, function (sym) {
-  return [
-    wasm.i32$const, ...sleb128i32(types.Symbol.size),
-    wasm.local$get, ...sym,
-    wasm.call, ...types.Symbol.fields.namespace.uleb128,
-    wasm.call, ...size.uleb128,
-    wasm.i32$add,
-    wasm.local$get, ...sym,
-    wasm.call, ...types.Symbol.fields.name.uleb128,
-    wasm.call, ...size.uleb128,
-    wasm.i32$add
-  ];
-});
-
-size.implement(types.Keyword, function (sym) {
-  return [
-    wasm.i32$const, ...sleb128i32(types.Keyword.size),
-    wasm.local$get, ...sym,
-    wasm.call, ...types.Keyword.fields.namespace.uleb128,
-    wasm.call, ...size.uleb128,
-    wasm.i32$add,
-    wasm.local$get, ...sym,
-    wasm.call, ...types.Keyword.fields.name.uleb128,
-    wasm.call, ...size.uleb128,
-    wasm.i32$add
-  ];
-});
-
-size.implement(types.RefsArray, function (arr) {
-  const len = this.local(wasm.i32),
-        idx = this.local(wasm.i32),
-        out = this.local(wasm.i32);
-  return [
-    wasm.i32$const, ...sleb128i32(types.RefsArray.size),
-    wasm.i32$const, ...sleb128i32(types.Array.size),
-    wasm.i32$add,
-    wasm.local$set, ...out,
-    wasm.local$get, ...arr,
-    wasm.call, ...types.RefsArray.fields.arr.uleb128,
-    wasm.call, ...types.Array.fields.length.uleb128,
-    wasm.local$set, ...len,
-    wasm.loop, wasm.void,
-      wasm.local$get, ...idx,
-      wasm.local$get, ...len,
-      wasm.i32$lt_u,
-      wasm.if, wasm.void,
-        wasm.local$get, ...arr,
-        wasm.local$get, ...idx,
-        wasm.call, ...refs_array_get.uleb128,
-        wasm.call, ...size.uleb128,
-        wasm.local$get, ...out,
-        wasm.i32$add,
-        wasm.local$set, ...out,
-        wasm.local$get, ...idx,
-        wasm.i32$const, 1,
-        wasm.i32$add,
-        wasm.local$set, ...idx,
-        wasm.br, 1,
-      wasm.end,
-    wasm.end,
-    wasm.local$get, ...out
-  ];
-});
-
-size.implement(types.PartialNode, function (node) {
-  return [
-    wasm.i32$const, ...sleb128i32(types.PartialNode.size),
-    wasm.local$get, ...node,
-    wasm.call, ...types.PartialNode.fields.arr.uleb128,
-    wasm.call, ...size.uleb128,
-    wasm.i32$add
-  ];
-});
-
-size.implement(types.FullNode, function (node) {
-  return [
-    wasm.i32$const, ...sleb128i32(types.FullNode.size),
-    wasm.local$get, ...node,
-    wasm.call, ...types.FullNode.fields.arr.uleb128,
-    wasm.call, ...size.uleb128,
-    wasm.i32$add
-  ];
-});
-
-size.implement(types.HashCollisionNode, function (node) {
-  return [
-    wasm.i32$const, ...sleb128i32(types.HashCollisionNode.size),
-    wasm.local$get, ...node,
-    wasm.call, ...types.HashCollisionNode.fields.arr.uleb128,
-    wasm.call, ...size.uleb128,
-    wasm.i32$add
-  ];
-});
-
-size.implement(types.LeafNode, function (node) {
-  return [
-    wasm.i32$const, ...sleb128i32(types.LeafNode.size),
-    wasm.local$get, ...node,
-    wasm.call, ...types.LeafNode.fields.key.uleb128,
-    wasm.call, ...size.uleb128,
-    wasm.i32$add,
-    wasm.local$get, ...node,
-    wasm.call, ...types.LeafNode.fields.val.uleb128,
-    wasm.call, ...size.uleb128,
-    wasm.i32$add
-  ];
-});
-
-size.implement(types.HashMap, function (map) {
-  return [
-    wasm.i32$const, ...sleb128i32(types.HashMap.size),
-    wasm.local$get, ...map,
-    wasm.call, ...types.HashMap.fields.root.uleb128,
-    wasm.call, ...size.uleb128,
-    wasm.i32$add
-  ];
-});
+//const size = pre_new_method(1, 0, 0, wasm.i32, { export: "size" });
+//
+//size.implement(types.Nil, () => [wasm.i32$const, 4]);
+//
+//size.implement(types.Array, function (arr) {
+//  return [
+//    wasm.i32$const, ...sleb128i32(types.Array.size),
+//    wasm.local$get, ...arr,
+//    wasm.call, ...types.Array.fields.length.uleb128,
+//    wasm.i32$add,
+//    wasm.local$get, ...arr,
+//    wasm.call, ...types.Array.fields.original.uleb128,
+//    wasm.call, ...size.uleb128,
+//    wasm.i32$add
+//  ];
+//});
+//
+//size.implement(types.String, function (str) {
+//  return [
+//    wasm.i32$const, ...sleb128i32(types.String.size),
+//    wasm.local$get, ...str,
+//    wasm.call, ...types.String.fields.arr.uleb128,
+//    wasm.call, ...size.uleb128,
+//    wasm.i32$add
+//  ];
+//});
+//
+//size.implement(types.Symbol, function (sym) {
+//  return [
+//    wasm.i32$const, ...sleb128i32(types.Symbol.size),
+//    wasm.local$get, ...sym,
+//    wasm.call, ...types.Symbol.fields.namespace.uleb128,
+//    wasm.call, ...size.uleb128,
+//    wasm.i32$add,
+//    wasm.local$get, ...sym,
+//    wasm.call, ...types.Symbol.fields.name.uleb128,
+//    wasm.call, ...size.uleb128,
+//    wasm.i32$add
+//  ];
+//});
+//
+//size.implement(types.Keyword, function (sym) {
+//  return [
+//    wasm.i32$const, ...sleb128i32(types.Keyword.size),
+//    wasm.local$get, ...sym,
+//    wasm.call, ...types.Keyword.fields.namespace.uleb128,
+//    wasm.call, ...size.uleb128,
+//    wasm.i32$add,
+//    wasm.local$get, ...sym,
+//    wasm.call, ...types.Keyword.fields.name.uleb128,
+//    wasm.call, ...size.uleb128,
+//    wasm.i32$add
+//  ];
+//});
+//
+//size.implement(types.RefsArray, function (arr) {
+//  const len = this.local(wasm.i32),
+//        idx = this.local(wasm.i32),
+//        out = this.local(wasm.i32);
+//  return [
+//    wasm.i32$const, ...sleb128i32(types.RefsArray.size),
+//    wasm.i32$const, ...sleb128i32(types.Array.size),
+//    wasm.i32$add,
+//    wasm.local$set, ...out,
+//    wasm.local$get, ...arr,
+//    wasm.call, ...types.RefsArray.fields.arr.uleb128,
+//    wasm.call, ...types.Array.fields.length.uleb128,
+//    wasm.local$set, ...len,
+//    wasm.loop, wasm.void,
+//      wasm.local$get, ...idx,
+//      wasm.local$get, ...len,
+//      wasm.i32$lt_u,
+//      wasm.if, wasm.void,
+//        wasm.local$get, ...arr,
+//        wasm.local$get, ...idx,
+//        wasm.call, ...refs_array_get.uleb128,
+//        wasm.call, ...size.uleb128,
+//        wasm.local$get, ...out,
+//        wasm.i32$add,
+//        wasm.local$set, ...out,
+//        wasm.local$get, ...idx,
+//        wasm.i32$const, 1,
+//        wasm.i32$add,
+//        wasm.local$set, ...idx,
+//        wasm.br, 1,
+//      wasm.end,
+//    wasm.end,
+//    wasm.local$get, ...out
+//  ];
+//});
+//
+//size.implement(types.PartialNode, function (node) {
+//  return [
+//    wasm.i32$const, ...sleb128i32(types.PartialNode.size),
+//    wasm.local$get, ...node,
+//    wasm.call, ...types.PartialNode.fields.arr.uleb128,
+//    wasm.call, ...size.uleb128,
+//    wasm.i32$add
+//  ];
+//});
+//
+//size.implement(types.FullNode, function (node) {
+//  return [
+//    wasm.i32$const, ...sleb128i32(types.FullNode.size),
+//    wasm.local$get, ...node,
+//    wasm.call, ...types.FullNode.fields.arr.uleb128,
+//    wasm.call, ...size.uleb128,
+//    wasm.i32$add
+//  ];
+//});
+//
+//size.implement(types.HashCollisionNode, function (node) {
+//  return [
+//    wasm.i32$const, ...sleb128i32(types.HashCollisionNode.size),
+//    wasm.local$get, ...node,
+//    wasm.call, ...types.HashCollisionNode.fields.arr.uleb128,
+//    wasm.call, ...size.uleb128,
+//    wasm.i32$add
+//  ];
+//});
+//
+//size.implement(types.LeafNode, function (node) {
+//  return [
+//    wasm.i32$const, ...sleb128i32(types.LeafNode.size),
+//    wasm.local$get, ...node,
+//    wasm.call, ...types.LeafNode.fields.key.uleb128,
+//    wasm.call, ...size.uleb128,
+//    wasm.i32$add,
+//    wasm.local$get, ...node,
+//    wasm.call, ...types.LeafNode.fields.val.uleb128,
+//    wasm.call, ...size.uleb128,
+//    wasm.i32$add
+//  ];
+//});
+//
+//size.implement(types.HashMap, function (map) {
+//  return [
+//    wasm.i32$const, ...sleb128i32(types.HashMap.size),
+//    wasm.local$get, ...map,
+//    wasm.call, ...types.HashMap.fields.root.uleb128,
+//    wasm.call, ...size.uleb128,
+//    wasm.i32$add
+//  ];
+//});
 
 /*----------*\
 |            |
@@ -8434,8 +8628,7 @@ const comp_atom = funcs.build(
 
 // todo: why not store main_func and def_func as Functions?
 funcs.build(
-  [wasm.i32, wasm.i32, wasm.i32], [wasm.i32],
-  { comp: "defmethod" },
+  [wasm.i32, wasm.i32, wasm.i32], [wasm.i32], { comp: "defmethod" },
   function (mtd_name, num_args, def_func) {
     const mtd = this.local(wasm.i32),
           mtd_func = this.local(wasm.i32),
@@ -8914,7 +9107,32 @@ const lookup_global = funcs.build(
 const emit_code_default = funcs.build(
   [wasm.i32, wasm.i32, wasm.i32], [wasm.i32], {},
   function (val, func, env) {
+    const nsnm = this.local(wasm.i32);
     return [
+      wasm.local$get, ...val,
+      wasm.call, ...types.Symbol.pred.uleb128,
+      wasm.if, wasm.void,
+        wasm.local$get, ...val,
+        wasm.call, ...types.Symbol.fields.namespace.uleb128,
+        wasm.local$tee, ...nsnm,
+        wasm.if, wasm.void,
+          wasm.local$get, ...val,
+          wasm.i32$const, ...sleb128i32(types.Symbol.fields.namespace.offset),
+          wasm.i32$add,
+          wasm.local$get, ...nsnm,
+          wasm.call, ...force_to_string.uleb128,
+          wasm.i32$store, 2, 0,
+        wasm.end,
+        //wasm.local$get, ...nsnm,
+        //wasm.call, ...free.uleb128,
+        wasm.local$get, ...val,
+        wasm.i32$const, ...sleb128i32(types.Symbol.fields.name.offset),
+        wasm.i32$add,
+        wasm.local$get, ...val,
+        wasm.call, ...types.Symbol.fields.name.uleb128,
+        wasm.call, ...force_to_string.uleb128,
+        wasm.i32$store, 2, 0,
+      wasm.end,
       wasm.local$get, ...val,
 // todo: why inc_refs? set_local_free should prevent freeing
       wasm.call, ...inc_refs.uleb128,
@@ -11158,16 +11376,6 @@ const emit_code_special_form = funcs.build(
         wasm.call, ...get.uleb128,
         wasm.local$tee, ...hdl,
         wasm.if, wasm.i32,
-	    //wasm.local$get, ...head,
-	    //wasm.call, ...types.Symbol.fields.namespace.uleb128,
-	    //wasm.if, wasm.void,
-	    //wasm.local$get, ...head,
-	    //wasm.call, ...types.Symbol.fields.name.uleb128,
-	    //wasm.call, ...print_string.uleb128,
-	    //wasm.local$get, ...head,
-	    //wasm.call, ...types.Symbol.fields.namespace.uleb128,
-	    //wasm.call, ...print_string.uleb128,
-	    //wasm.end,
           wasm.local$get, ...func,
           wasm.local$get, ...args,
           wasm.local$get, ...env,
@@ -11176,19 +11384,6 @@ const emit_code_special_form = funcs.build(
           wasm.call_indirect,
           ...sleb128i32(get_type_idx(3, 0, 0, wasm.i32)), 0,
         wasm.else,
-	    //wasm.local$get, ...head,
-	    //wasm.call, ...types.Symbol.fields.namespace.uleb128,
-	    //wasm.local$tee, ...head,
-	    //wasm.if, wasm.void,
-	    //wasm.i32$const, ...sleb128i32(js_string_to_comp("call-mtd")),
-	    //wasm.i32$const, ...sleb128i32(js_string_to_comp("call-mtd")),
-	    //wasm.call, ...eq.uleb128,
-	    //wasm.i32$const, ...sleb128i32(js_string_to_comp("comp")),
-	    //wasm.i32$const, ...sleb128i32(js_string_to_comp("comp")),
-	    //wasm.call, ...eq.uleb128,
-	    //wasm.i32$and,
-	    //wasm.call, ...print_i32.uleb128,
-            //wasm.end,
           wasm.i32$const, 0,
         wasm.end,
       wasm.else,
@@ -11237,7 +11432,7 @@ const emit_code_num64 = funcs.build(
         wasm.local$get, ...head,
         wasm.call, ...types.Symbol.fields.namespace.uleb128,
         wasm.local$tee, ...ns,
-        wasm.call, ...types.String.pred.uleb128,
+        wasm.call, ...is_string_like.uleb128,
         wasm.if, wasm.i32,
           wasm.local$get, ...ns,
           wasm.i32$const, ...sleb128i32(cached_string("i64")),
@@ -11286,10 +11481,14 @@ const emit_code_num64 = funcs.build(
             wasm.call, ...free.uleb128,
             wasm.local$get, ...func,
             wasm.local$get, ...ns,
+// todo: use store_string method for FileSlice/String?
+            wasm.call, ...force_to_string.uleb128,
             wasm.call, ...store_string.uleb128,
             wasm.local$get, ...head,
             wasm.call, ...types.Symbol.fields.name.uleb128,
             wasm.local$tee, ...nm,
+// todo: use store_string method for FileSlice/String?
+            wasm.call, ...force_to_string.uleb128,
             wasm.call, ...store_string.uleb128,
             wasm.call, ...get_op_code.uleb128,
             wasm.call, ...append_code.uleb128,
@@ -11360,6 +11559,8 @@ const emit_js_func_call = funcs.build(
           wasm.call, ...append_code.uleb128,
           wasm.local$get, ...head,
           wasm.call, ...types.Symbol.fields.name.uleb128,
+// todo: use store_string method for FileSlice/String?
+          wasm.call, ...force_to_string.uleb128,
           wasm.call, ...store_string.uleb128,
           wasm.call, ...append_varuint32.uleb128,
           wasm.i32$const, ...sleb128i32(wasm.i32$const),
@@ -12395,7 +12596,7 @@ function switch_string_match (str, idx, match_idx, ...clauses) {
         wasm.if, wasm.i32,
           wasm.local$get, ...idx,
           wasm.i32$const, ...sleb128i32(cmpr),
-          wasm.call, ...string_length.uleb128,
+          wasm.call, ...count.uleb128,
           wasm.i32$add,
           wasm.local$tee, ...match_idx,
         wasm.else,
@@ -12495,7 +12696,14 @@ const parse_symbol = funcs.build(
       wasm.local$get, ...iskw,
       wasm.if, wasm.i32,
         wasm.local$get, ...ns,
+        wasm.if, wasm.i32,
+          wasm.local$get, ...ns,
+          wasm.call, ...force_to_string.uleb128,
+        wasm.else,
+          wasm.local$get, ...ns,
+        wasm.end,
         wasm.local$get, ...nm,
+        wasm.call, ...force_to_string.uleb128,
         wasm.i32$const, 1,
         wasm.call, ...keyword.uleb128,
       wasm.else,
@@ -12857,6 +13065,7 @@ const parse_string = funcs.build(
         wasm.call, ...free.uleb128,
       wasm.else,
         wasm.local$get, ...segment,
+        wasm.call, ...force_to_string.uleb128,
       wasm.end,
 // wasm.local$tee, ...out,
 // wasm.local$get, ...out,
@@ -12879,7 +13088,7 @@ read_form.build(function (str, idx, lineno) {
     wasm.local$get, ...idx,
     wasm.local$set, ...org_idx,
     wasm.local$get, ...str,
-    wasm.call, ...string_length.uleb128,
+    wasm.call, ...count.uleb128,
     wasm.local$set, ...len,
     wasm.loop, wasm.void,
       wasm.local$get, ...idx,
@@ -13088,7 +13297,7 @@ const eval_stream = funcs.build(
     return [
       wasm.local$get, ...idx,
       wasm.local$get, ...str,
-      wasm.call, ...string_length.uleb128,
+      wasm.call, ...count.uleb128,
       wasm.i32$lt_u,
       wasm.if, wasm.void,
         wasm.local$get, ...str,
@@ -13165,12 +13374,13 @@ begin_package();
 function eval_file (f, interpret) {
 // todo: change to createReadStream
   const fd = fs.openSync(f, "r"),
-        file = comp.File(fd),
-        len = fs.fstatSync(fd).size;
+        len = fs.fstatSync(fd).size,
+        file = comp.File(fd, len),
+        fsl = comp.FileSlice(file, 0, len);
   let idx = 0,
       lineno = 0;
   while (idx < len) {
-    [idx, lineno] = comp.eval_stream(file, idx, lineno, 0);
+    [idx, lineno] = comp.eval_stream(fsl, idx, lineno, 0);
   }
   if (interpret) compile();
   comp.free(file);
