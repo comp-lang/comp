@@ -6,19 +6,35 @@
 
 (comp/defmethod :comp/to-str 2 nil)
 
-(comp/defmethod :comp/pr-str 2
-  (comp/fn (x _) ()
-    (comp/call-mtd comp/to-str x comp/to-str)))
+(comp/defmethod :comp/to-sym 2 nil)
 
 (comp/defmethod :comp/syntax-quote 2
   (comp/fn (x _) () x))
-
-(comp/defmethod :comp/to-sym 2 nil)
 
 (comp/defmethod :comp/get-scope 5
   (comp/fn (x scope inner-env outer-env _) ()
     scope))
 
+(comp/def :comp/curr-ns (comp/atom (comp/list 'comp.core)))
+
+(comp/def :comp/aliases (comp/atom {}))
+
+;; compile
+(comp/compile)
+
+(comp/defmethod :comp/pr-str 2
+  (comp/fn (x _) ()
+    (comp/call-mtd comp/to-str x comp/to-str)))
+
+;; todo: throw if namespaced
+(comp/def :comp/store-alias
+  (comp/fn (alias sym _) ()
+    (comp/reset! comp/aliases
+      (comp/assoc (comp/deref comp/aliases)
+        (comp/to-sym alias)
+        (comp/to-sym sym)))))
+
+;; compile
 (comp/compile)
 
 (comp/impl comp/to-sym Symbol (comp/fn (s _) () s))
@@ -28,18 +44,6 @@
     (comp/symbol
       (comp.Symbol/namespace kw)
       (comp.Symbol/name kw))))
-
-(comp/def :comp/curr-ns (comp/atom (comp/list 'comp.core)))
-
-(comp/def :comp/aliases (comp/atom {}))
-
-;; todo: throw if namespaced
-(comp/def :comp/store-alias
-  (comp/fn (alias sym _) ()
-    (comp/reset! comp/aliases
-      (comp/assoc (comp/deref comp/aliases)
-        (comp/to-sym alias)
-        (comp/to-sym sym)))))
 
 (comp/def :comp/store-ns-alias
   (comp/fn (alias _) ()
@@ -56,9 +60,38 @@
       (comp/def nm val)
       (comp/store-alias nm nm))))
 
+;; compile
+(comp/compile)
+
+(comp/def* :comp/gensym-counter (comp/atom 0))
+
 (comp/def* :comp/pr
   (comp/fn (x _) ()
     (js/console.log (comp/pr-str x))))
+
+(comp/def* :comp/string-ends-with
+  (comp/fn (string substring _) ()
+    (comp/string-matches-at string substring
+      (i64/sub
+        (comp.String/length string)
+        (comp.String/length substring)))))
+
+(comp/def* :comp/special-forms (comp/atom {}))
+
+(comp/def* :comp/map!
+  (comp/fn (f coll _) ()
+    (comp/to-seq
+      (comp/for-each coll (comp/array (comp/count coll)) 0 -1
+        (comp/fn (el arr i _) (f)
+          (comp/array-set arr i (f el)))))))
+          ;(comp/let (val (f el))
+          ;  (comp/do
+          ;(comp/array-set arr i val)
+          ;(comp/print-refs val)
+          ;arr)))))))
+
+;; compile
+(comp/compile)
 
 (comp/def* :comp/map
   (comp/fn (f coll map) ()
@@ -70,13 +103,6 @@
               (f (comp/first coll))
               (map f (comp/rest coll)))))
         coll))))
-
-(comp/def* :comp/map!
-  (comp/fn (f coll _) ()
-    (comp/to-seq
-      (comp/for-each coll (comp/array (comp/count coll)) 0 -1
-        (comp/fn (el arr i _) (f)
-          (comp/array-set arr i (f el)))))))
 
 ;; todo: escape double quotes
 (comp/impl comp/pr-str String
@@ -163,7 +189,7 @@
                   (comp/concat-str accum ")"))))))
         "()"))))
 
-(comp/compile)
+;(comp/compile)
 
 ;; todo: handle splicing-unquote
 (comp/impl comp/syntax-quote Seq
@@ -173,7 +199,7 @@
         (comp/let (accum (comp/array (i64/add cnt 1)))
           (comp/to-seq
             (comp/for-each form
-              (comp/array-set accum 0 (comp/symbol "comp" "list")) 0 -1
+              (comp/array-set accum 0 'comp/list) 0 -1
               (comp/fn (el accum i _) ()
                 (comp/let
                   (el (comp/if
@@ -189,18 +215,8 @@
 
 (comp/impl comp/syntax-quote Vector
   (comp/fn (vec _) ()
-    (comp/list
-      (comp/symbol "comp" "to-vec")
+    (comp/list 'comp/to-vec
       (comp/syntax-quote (comp/to-seq vec)))))
-
-(comp/def* :comp/string-ends-with
-  (comp/fn (string substring _) ()
-    (comp/string-matches-at string substring
-      (i64/sub
-        (comp.String/length string)
-        (comp.String/length substring)))))
-
-(comp/def* :comp/gensym-counter (comp/atom 0))
 
 ;; todo: pass environment as arg
 (comp/impl comp/syntax-quote Symbol
@@ -218,29 +234,26 @@
                   "__gensym__")
                 (comp/to-str (comp/deref comp/gensym-counter)))
               nm)))
-      (comp/list (comp/symbol "comp" "symbol") ns nm))))
-
-(comp/def* :comp/special-forms (comp/atom {}))
+      (comp/list 'comp/symbol ns nm))))
 
 (comp/impl comp/expand-form Seq
   (comp/fn (form env) ()
     (comp/if (i64/gt_u (comp/count form) 0)
       (comp/let
         (head (comp/first form)
-         tail (comp/rest form)
          special
            (comp/if (comp.Symbol/instance head)
-             (comp/if (comp/eq head (comp/symbol "comp" "syntax-quote"))
+             (comp/if (comp/eq head 'comp/syntax-quote)
                (comp/let
                  [gensym-num (comp/deref comp/gensym-counter)
-                  form (comp/syntax-quote (comp/first tail))]
+                  form (comp/syntax-quote (comp/nth form 1 nil))]
                  (comp/do
                    (comp/reset! comp/gensym-counter (i64/add gensym-num 1))
                    (comp/call-mtd comp/expand-form form env)))
                (comp/let
                  (head (comp/call-mtd comp/expand-form head env)
                   special (comp/get (comp/deref comp/special-forms) head nil))
-                 (comp/if special (special tail env) nil)))
+                 (comp/if special (special form env) nil)))
              nil))
         (comp/if special special
           (comp/map!
@@ -250,21 +263,21 @@
       form)))
 
 (comp/store-alias 'if 'if)
-;(comp/store-alias 'do 'do)
-;(comp/store-alias 'compile 'compile)
-;(comp/store-alias 'store-ns-alias 'store-ns-alias)
-;(comp/store-alias 'symbol 'symbol)
-;(comp/store-alias 'let 'let)
-;(comp/store-alias 'def 'def)
+;;(comp/store-alias 'do 'do)
+;;(comp/store-alias 'compile 'compile)
+;;(comp/store-alias 'store-ns-alias 'store-ns-alias)
+;;(comp/store-alias 'symbol 'symbol)
+;;(comp/store-alias 'let 'let)
+;;(comp/store-alias 'def 'def)
 
 (comp/compile)
 
 (comp/reset! comp/special-forms
   (comp/assoc (comp/deref comp/special-forms) 'defspecial
-    (comp/fn (args env _) ()
+    (comp/fn (form env _) ()
       (comp/let
-        (nm (comp.Symbol/name (comp/first args))
-         fn (comp/nth args 1 nil))
+        (nm (comp.Symbol/name (comp/nth form 1 nil))
+         fn (comp/nth form 2 nil))
         (comp/call-mtd comp/expand-form
          `(comp/do (comp/compile)
             (comp/store-ns-alias (comp/symbol nil ~nm))
@@ -294,13 +307,13 @@
 ;; todo: namespace
 ;; todo: separate params & scope
 (defspecial fn
-  (comp/fn (args env _) ()
+  (comp/fn (form env _) ()
     (comp/let
-      (nm (let [nm (comp/first args)]
+      (nm (let (nm (comp/nth form 1 nil))
             (comp/if (comp.Symbol/instance nm) nm nil))
-       params (comp/nth args (comp/if nm 1 0) nil)
+       params (comp/nth form (comp/if nm 2 1) nil)
        params (comp/conj params nm)
-       body (comp/nth args (comp/if nm 2 1) nil)
+       body (comp/nth form (comp/if nm 3 2) nil)
        scope-env
          (comp/for-each params (comp/deref comp/aliases) 0 -1
            (comp/fn (param env i _) ()
@@ -314,8 +327,8 @@
         (comp/call-mtd comp/expand-form body env)))))
 
 (defspecial def
-  (comp/fn (args env _) ()
-    (comp/let (nm (comp.Symbol/name (comp/first args)))
+  (comp/fn (form env _) ()
+    (comp/let (nm (comp.Symbol/name (comp/nth form 1 nil)))
       (comp/list 'comp/do (comp/list 'comp/compile)
         (comp/list 'comp/store-ns-alias (comp/list 'comp/symbol nil nm))
         (comp/list 'comp/let
@@ -331,7 +344,7 @@
                 (comp/list 'comp.Symbol/name 'full))))
           (comp/list 'comp/def 'kw
             (comp/call-mtd comp/expand-form
-              (comp/nth args 1 nil) env)))))))
+              (comp/nth args 2 nil) env)))))))
 
 (comp/pr {:a 1 :b 2})
 (comp/pr `x#)
@@ -370,7 +383,7 @@
   (comp/fn (form env) ()
     (comp/for-each form {} 0 -1
       (comp/fn (kv accum n _) ()
-        (comp/list (comp/symbol "comp" "assoc") accum
+        (comp/list 'comp/assoc accum
           (comp.LeafNode/key kv)
           (comp.LeafNode/val kv))))))
 
