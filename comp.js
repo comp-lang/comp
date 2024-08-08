@@ -2571,7 +2571,7 @@ define_type("Nil", 0);
 define_type("False", 0);
 define_type("True", 0);
 
-const refs_default = 0x80000000;
+const refs_default = 0;
 
 define_type(
   "Int", 0,
@@ -3183,7 +3183,7 @@ const read_refs = funcs.build(
       wasm.i32$add,
       wasm.atomic$prefix,
       wasm.i32$atomic$load, 2, 0,
-      wasm.i32$const, ...sleb128i32(0x1fffffff), // strip first three bits
+      wasm.i32$const, ...sleb128i32(0x3fffffff), // strip first three bits
       wasm.i32$and
     ];
   }
@@ -3203,7 +3203,7 @@ function impl_free (type, free_self) {
       // atomically subtract 1 from refs, returns previous value:
       wasm.i32$atomic$rmw$sub, 2, 0,
       // strip first three bits (used for local free)
-      wasm.i32$const, ...sleb128i32(0x1fffffff),
+      wasm.i32$const, ...sleb128i32(0x3fffffff),
       wasm.i32$and,
       wasm.i32$eqz,
       wasm.if, wasm.void,
@@ -3262,6 +3262,7 @@ impl_free(types.VariadicFunction, function (free_self) {
 impl_free(types.Int, (fm) => fm);
 impl_free(types.Float, (fm) => fm);
 
+// todo: impose max to prevent overflowing to flags
 const inc_refs = pre_new_method(1, 0, 0, wasm.i32,
   { export: "inc_refs" },
   function (val) {
@@ -3336,7 +3337,7 @@ const get = pre_new_method(3, 0, 0, wasm.i32, { comp: "get" }),
         comp: "count",
         comp_wrapper: [wrap_result_i32_to_int]
       }),
-      for_each = pre_new_method(5, 0, 0, wasm.i32, {}),
+      for_each = pre_new_method(6, 0, 0, wasm.i32, {}),
       to_seq = pre_new_method(1, 0, 0, wasm.i32, { comp: "to-seq" }),
       to_vec = pre_new_method(1, 0, 0, wasm.i32, { comp: "to-vec" });
 
@@ -3653,13 +3654,13 @@ const refs_array_for_each = funcs.build(
 );
 
 for_each.implement(types.RefsArray,
-  function (arr, accum, idx, end_idx, func) {
+  function (arr, accum, idx, end_idx, accum_idx, func) {
     return [
       wasm.local$get, ...arr,
       wasm.local$get, ...accum,
       wasm.local$get, ...idx,
       wasm.local$get, ...end_idx,
-      wasm.local$get, ...idx,
+      wasm.local$get, ...accum_idx,
       wasm.local$get, ...func,
       wasm.call, ...refs_array_for_each.uleb128
     ];
@@ -5291,10 +5292,19 @@ count.implement(types.Vector, function (vec) {
 to_vec.implement(types.Vector, vec => [wasm.local$get, ...vec]);
 
 const vec_node_for_each = funcs.build(
-  [wasm.i32, wasm.i32, wasm.i32, wasm.i32, wasm.i32, wasm.i32, wasm.i32],
+  [
+    wasm.i32,
+    wasm.i32,
+    wasm.i32,
+    wasm.i32,
+    wasm.i32,
+    wasm.i32,
+    wasm.i32,
+    wasm.i32
+  ],
   [wasm.i32], {},
 // todo: use end_idx
-  function (vec, node, accum, n, end_idx, shift, func) {
+  function (vec, node, accum, n, end_idx, accum_idx, shift, func) {
     const idx = this.local(wasm.i32),
           end_n = this.local(wasm.i32),
           len = this.local(wasm.i32),
@@ -5351,6 +5361,7 @@ const vec_node_for_each = funcs.build(
               wasm.local$get, ...accum,
               wasm.local$get, ...n,
               wasm.local$get, ...end_idx,
+              wasm.local$get, ...accum_idx,
               wasm.local$get, ...shift2,
               wasm.local$get, ...func,
               wasm.call, ...this.uleb128,
@@ -5358,7 +5369,7 @@ const vec_node_for_each = funcs.build(
             wasm.else,
               wasm.local$get, ...entry,
               wasm.local$get, ...accum,
-              wasm.local$get, ...n,
+              wasm.local$get, ...accum_idx,
               wasm.local$get, ...func,
               wasm.call, ...call_for_each.uleb128,
               wasm.local$set, ...accum,
@@ -5367,6 +5378,10 @@ const vec_node_for_each = funcs.build(
             wasm.i32$const, 1,
             wasm.i32$add,
             wasm.local$set, ...n,
+            wasm.local$get, ...accum_idx,
+            wasm.i32$const, 1,
+            wasm.i32$add,
+            wasm.local$set, ...accum_idx,
             wasm.local$get, ...idx,
             wasm.i32$const, 1,
             wasm.i32$add,
@@ -5400,7 +5415,7 @@ const vec_node_for_each = funcs.build(
         wasm.i32$const, 31,
         wasm.i32$and,
 	wasm.local$get, ...end_idx,
-        wasm.local$get, ...n,
+        wasm.local$get, ...accum_idx,
         wasm.local$get, ...func,
         wasm.call, ...refs_array_for_each.uleb128,
         wasm.local$set, ...accum,
@@ -5412,7 +5427,7 @@ const vec_node_for_each = funcs.build(
 
 // todo: do more efficiently
 for_each.implement(types.Vector,
-  function (vec, accum, idx, end_idx, func) {
+  function (vec, accum, idx, end_idx, accum_idx, func) {
     const n = this.local(wasm.i32),
           cnt = this.local(wasm.i32);
     return [
@@ -5422,6 +5437,7 @@ for_each.implement(types.Vector,
       wasm.local$get, ...accum,
       wasm.local$get, ...idx,
       wasm.local$get, ...end_idx,
+      wasm.local$get, ...accum_idx,
       wasm.local$get, ...vec,
       wasm.call, ...types.Vector.fields.shift.uleb128,
       wasm.local$get, ...func,
@@ -6043,14 +6059,14 @@ impl_free(types.HashMap, function (free_self) {
 });
 
 // todo: use idx and end_idx
-function map_node_for_each (node, accum, idx, end_idx, func) {
+function map_node_for_each (node, accum, idx, end_idx, accum_idx, func) {
   return [
     wasm.local$get, ...node,
     wasm.call, ...types.PartialNode.fields.arr.uleb128,
     wasm.local$get, ...accum,
     wasm.i32$const, 0,
     wasm.i32$const, ...sleb128i32(-1),
-    wasm.i32$const, 0,
+    wasm.local$get, ...accum_idx,
     wasm.local$get, ...func,
     wasm.call, ...refs_array_for_each.uleb128,
   ];
@@ -6060,27 +6076,32 @@ for_each.implement(types.PartialNode, map_node_for_each);
 for_each.implement(types.FullNode, map_node_for_each);
 for_each.implement(types.HashCollisionNode, map_node_for_each);
 
-for_each.implement(types.LeafNode, function (node, accum, idx, end_idx, func) {
-  return [
-    wasm.local$get, ...node,
-    wasm.local$get, ...accum,
-    wasm.local$get, ...idx,
-    wasm.local$get, ...func,
-    wasm.call, ...call_for_each.uleb128,
-  ];
-});
+for_each.implement(types.LeafNode,
+  function (node, accum, idx, end_idx, accum_idx, func) {
+    return [
+      wasm.local$get, ...node,
+      wasm.local$get, ...accum,
+      wasm.local$get, ...accum_idx,
+      wasm.local$get, ...func,
+      wasm.call, ...call_for_each.uleb128,
+    ];
+  }
+);
 
-for_each.implement(types.HashMap, function (map, accum, idx, end_idx, func) {
-  return [
-    wasm.local$get, ...map,
-    wasm.call, ...types.HashMap.fields.root.uleb128,
-    wasm.local$get, ...accum,
-    wasm.local$get, ...idx,
-    wasm.local$get, ...end_idx,
-    wasm.local$get, ...func,
-    wasm.call, ...for_each.uleb128
-  ];
-});
+for_each.implement(types.HashMap,
+  function (map, accum, idx, end_idx, accum_idx, func) {
+    return [
+      wasm.local$get, ...map,
+      wasm.call, ...types.HashMap.fields.root.uleb128,
+      wasm.local$get, ...accum,
+      wasm.local$get, ...idx,
+      wasm.local$get, ...end_idx,
+      wasm.local$get, ...accum_idx,
+      wasm.local$get, ...func,
+      wasm.call, ...for_each.uleb128
+    ];
+  }
+);
 
 // shifts hash right by a multiple of 5 corresponding
 // to the level of the node (0 = top level, 5, 10, etc)
@@ -6766,17 +6787,20 @@ to_vec.implement(types.Seq, function (seq) {
   ];
 });
 
-for_each.implement(types.Seq, function (seq, accum, idx, end_idx, func) {
-  return [
-    wasm.local$get, ...seq,
-    wasm.call, ...types.Seq.fields.root.uleb128,
-    wasm.local$get, ...accum,
-    wasm.local$get, ...idx,
-    wasm.local$get, ...end_idx,
-    wasm.local$get, ...func,
-    wasm.call, ...for_each.uleb128
-  ];
-});
+for_each.implement(types.Seq,
+  function (seq, accum, idx, end_idx, accum_idx, func) {
+    return [
+      wasm.local$get, ...seq,
+      wasm.call, ...types.Seq.fields.root.uleb128,
+      wasm.local$get, ...accum,
+      wasm.local$get, ...idx,
+      wasm.local$get, ...end_idx,
+      wasm.local$get, ...accum_idx,
+      wasm.local$get, ...func,
+      wasm.call, ...for_each.uleb128
+    ];
+  }
+);
 
 function seq_to_vec (seq) {
   const arr = this.local(wasm.i32),
@@ -6879,48 +6903,69 @@ nth.implement(types.ConsSeq, function (seq, n, not_found) {
   ];
 });
 
-// todo: review for correctness
-for_each.implement(types.ConsSeq, function (seq, accum, idx, end_idx, func) {
-  const old_accum = this.local(wasm.i32);
-  return [
-    wasm.local$get, ...seq,
-    wasm.call, ...types.ConsSeq.fields.first.uleb128,
-    wasm.local$get, ...accum,
-    wasm.local$get, ...idx,
-    wasm.local$get, ...func,
-    wasm.call, ...call_for_each.uleb128,
-    wasm.local$set, ...old_accum,
-    wasm.local$get, ...seq,
-    wasm.call, ...types.ConsSeq.fields.rest.uleb128,
-    wasm.local$get, ...old_accum,
-    wasm.local$get, ...idx,
-    wasm.i32$const, 1,
-    wasm.i32$add,
-    wasm.local$get, ...end_idx,
-    wasm.local$get, ...func,
-    wasm.call, ...for_each.uleb128,
-    wasm.local$tee, ...accum,
-    wasm.local$get, ...accum,
-    wasm.local$get, ...old_accum,
-    wasm.i32$ne,
-    wasm.if, wasm.void,
-      wasm.local$get, ...old_accum,
-      wasm.call, ...free.uleb128,
-    wasm.end
-  ];
-});
+// todo: skip first if idx > 0
+for_each.implement(types.ConsSeq,
+  function (seq, accum, idx, end_idx, accum_idx, func) {
+    const rest = this.local(wasm.i32),
+          cnt = this.local(wasm.i32);
+    return [
+      wasm.local$get, ...seq,
+      wasm.call, ...types.ConsSeq.fields.first.uleb128,
+      wasm.local$get, ...accum,
+      wasm.local$get, ...accum_idx,
+      wasm.local$get, ...func,
+      wasm.call, ...call_for_each.uleb128,
+      wasm.local$set, ...accum,
+      wasm.local$get, ...seq,
+      wasm.call, ...types.ConsSeq.fields.rest.uleb128,
+      wasm.local$tee, ...rest,
+      wasm.call, ...count.uleb128,
+      wasm.if, wasm.i32,
+        wasm.local$get, ...rest,
+        wasm.local$get, ...accum,
+// todo: adjust for idx > 1
+        wasm.i32$const, 0,
+        wasm.local$get, ...end_idx,
+        wasm.local$get, ...accum_idx,
+        wasm.i32$const, 1,
+        wasm.i32$add,
+        wasm.local$get, ...func,
+        wasm.call, ...for_each.uleb128,
+        //wasm.local$tee, ...accum,
+        //wasm.local$get, ...accum,
+        //wasm.local$get, ...old_accum,
+        //wasm.i32$ne,
+        //wasm.if, wasm.void,
+        //  wasm.local$get, ...old_accum,
+        //  wasm.call, ...free.uleb128,
+        //wasm.end,
+      wasm.else,
+        wasm.local$get, ...accum,
+      wasm.end
+    ];
+  }
+);
 
 to_vec.implement(types.ConsSeq, seq_to_vec);
 
 const cons = funcs.build(
   [wasm.i32, wasm.i32], [wasm.i32], { comp: "cons" },
   function (val, coll) {
+    const rest = this.local(wasm.i32);
     return [
       wasm.local$get, ...val,
       wasm.call, ...inc_refs.uleb128,
       wasm.local$get, ...coll,
-      wasm.call, ...inc_refs.uleb128,
       wasm.call, ...to_seq.uleb128,
+      wasm.local$tee, ...rest,
+      wasm.local$get, ...coll,
+      wasm.i32$eq,
+      wasm.if, wasm.i32,
+        wasm.local$get, ...rest,
+        wasm.call, ...inc_refs.uleb128,
+      wasm.else,
+        wasm.local$get, ...rest,
+      wasm.end,
       wasm.call, ...types.ConsSeq.constr.uleb128,
       wasm.call, ...types.Seq.constr.uleb128,
     ];
@@ -7127,36 +7172,46 @@ nth.implement(types.ConcatSeq, function (seq, n, not_found) {
   ];
 });
 
-for_each.implement(types.ConcatSeq, function (seq, accum, idx, end_idx, func) {
-  const old_accum = this.local(wasm.i32);
-  return [
-    wasm.local$get, ...seq,
-    wasm.call, ...types.ConcatSeq.fields.left.uleb128,
-    wasm.local$get, ...accum,
-    wasm.local$get, ...idx,
-    wasm.local$get, ...end_idx,
-    wasm.local$get, ...func,
-    wasm.call, ...for_each.uleb128,
-    wasm.local$set, ...old_accum,
-    wasm.local$get, ...seq,
-    wasm.call, ...types.ConcatSeq.fields.right.uleb128,
-    wasm.local$get, ...old_accum,
-    wasm.local$get, ...idx,
-    wasm.i32$const, 1,
-    wasm.i32$add,
-    wasm.local$get, ...end_idx,
-    wasm.local$get, ...func,
-    wasm.call, ...for_each.uleb128,
-    wasm.local$tee, ...accum,
-    wasm.local$get, ...accum,
-    wasm.local$get, ...old_accum,
-    wasm.i32$ne,
-    wasm.if, wasm.void,
+// todo: skip left if idx > count
+// adjust end_idx for right
+for_each.implement(types.ConcatSeq,
+  function (seq, accum, idx, end_idx, accum_idx, func) {
+    const old_accum = this.local(wasm.i32),
+          lft = this.local(wasm.i32),
+          cnt = this.local(wasm.i32);
+    return [
+      wasm.local$get, ...seq,
+      wasm.call, ...types.ConcatSeq.fields.left.uleb128,
+      wasm.local$tee, ...lft,
+      wasm.local$get, ...accum,
+      wasm.local$get, ...idx,
+      wasm.local$get, ...end_idx,
+      wasm.local$get, ...accum_idx,
+      wasm.local$get, ...func,
+      wasm.call, ...for_each.uleb128,
+      wasm.local$set, ...old_accum,
+      wasm.local$get, ...seq,
+      wasm.call, ...types.ConcatSeq.fields.right.uleb128,
       wasm.local$get, ...old_accum,
-      wasm.call, ...free.uleb128,
-    wasm.end
-  ];
-});
+      wasm.i32$const, 0,
+      wasm.local$get, ...end_idx,
+      wasm.local$get, ...accum_idx,
+      wasm.local$get, ...lft,
+      wasm.call, ...count.uleb128,
+      wasm.i32$add,
+      wasm.local$get, ...func,
+      wasm.call, ...for_each.uleb128,
+      wasm.local$tee, ...accum,
+      wasm.local$get, ...accum,
+      wasm.local$get, ...old_accum,
+      wasm.i32$ne,
+      wasm.if, wasm.void,
+        wasm.local$get, ...old_accum,
+        wasm.call, ...free.uleb128,
+      wasm.end
+    ];
+  }
+);
 
 to_vec.implement(types.ConcatSeq, seq_to_vec);
 
@@ -7286,29 +7341,32 @@ nth.implement(types.VectorSeq, function (seq, n, not_found) {
   ];
 });
 
-for_each.implement(types.VectorSeq, function (seq, accum, idx, end_idx, func) {
-  const vec = this.local(wasm.i32);
-  return [
-    wasm.local$get, ...seq,
-    wasm.call, ...types.VectorSeq.fields.vec.uleb128,
-    wasm.local$tee, ...vec,
-    wasm.local$get, ...vec,
-    wasm.call, ...types.Vector.fields.root.uleb128,
-    wasm.local$get, ...accum,
-    wasm.local$get, ...seq,
-    wasm.call, ...types.VectorSeq.fields.node_off.uleb128,
-    wasm.local$get, ...seq,
-    wasm.call, ...types.VectorSeq.fields.arr_off.uleb128,
-    wasm.i32$add,
-    wasm.local$get, ...idx,
-    wasm.i32$add,
-    wasm.local$get, ...end_idx,
-    wasm.local$get, ...vec,
-    wasm.call, ...types.Vector.fields.shift.uleb128,
-    wasm.local$get, ...func,
-    wasm.call, ...vec_node_for_each.uleb128
-  ];
-});
+for_each.implement(types.VectorSeq,
+  function (seq, accum, idx, end_idx, accum_idx, func) {
+    const vec = this.local(wasm.i32);
+    return [
+      wasm.local$get, ...seq,
+      wasm.call, ...types.VectorSeq.fields.vec.uleb128,
+      wasm.local$tee, ...vec,
+      wasm.local$get, ...vec,
+      wasm.call, ...types.Vector.fields.root.uleb128,
+      wasm.local$get, ...accum,
+      wasm.local$get, ...seq,
+      wasm.call, ...types.VectorSeq.fields.node_off.uleb128,
+      wasm.local$get, ...seq,
+      wasm.call, ...types.VectorSeq.fields.arr_off.uleb128,
+      wasm.i32$add,
+      wasm.local$get, ...idx,
+      wasm.i32$add,
+      wasm.local$get, ...end_idx,
+      wasm.local$get, ...accum_idx,
+      wasm.local$get, ...vec,
+      wasm.call, ...types.Vector.fields.shift.uleb128,
+      wasm.local$get, ...func,
+      wasm.call, ...vec_node_for_each.uleb128
+    ];
+  }
+);
 
 // todo: need to account for node_off
 to_vec.implement(types.VectorSeq, function (seq) {
@@ -7472,22 +7530,24 @@ nth.implement(types.RefsArraySeq, function (seq, n, not_found) {
   ];
 });
 
-for_each.implement(types.RefsArraySeq, function (seq, accum, idx, end_idx, func) {
-  return [
-    wasm.local$get, ...seq,
-    wasm.call, ...types.RefsArraySeq.fields.arr.uleb128,
-    wasm.local$get, ...accum,
-    wasm.local$get, ...seq,
-    wasm.call, ...types.RefsArraySeq.fields.offset.uleb128,
-    wasm.local$get, ...idx,
-    wasm.i32$add,
-    wasm.local$tee, ...idx,
-    wasm.local$get, ...end_idx,
-    wasm.local$get, ...idx,
-    wasm.local$get, ...func,
-    wasm.call, ...refs_array_for_each.uleb128
-  ];
-});
+for_each.implement(types.RefsArraySeq,
+  function (seq, accum, idx, end_idx, accum_idx, func) {
+    return [
+      wasm.local$get, ...seq,
+      wasm.call, ...types.RefsArraySeq.fields.arr.uleb128,
+      wasm.local$get, ...accum,
+      wasm.local$get, ...seq,
+      wasm.call, ...types.RefsArraySeq.fields.offset.uleb128,
+      wasm.local$get, ...idx,
+      wasm.i32$add,
+      wasm.local$tee, ...idx,
+      wasm.local$get, ...end_idx,
+      wasm.local$get, ...accum_idx,
+      wasm.local$get, ...func,
+      wasm.call, ...refs_array_for_each.uleb128
+    ];
+  }
+);
 
 // todo: replace with real implementation
 to_vec.implement(types.RefsArraySeq, seq_to_vec);
@@ -7975,9 +8035,8 @@ compile();
 \*----------*/
 
 // todo: get rid of local flag, allow more space for refs
-const local_flag = 0x80000000,
-      external_flag = 0x40000000,
-      derived_flag = 0x20000000;
+const external_flag = 0x80000000,
+      derived_flag = 0x40000000;
 
 const set_local_free_derived = funcs.build(
   [wasm.i32, wasm.i32], [wasm.i32], {}, function (val, on) {
@@ -8528,17 +8587,28 @@ funcs.build(
   [wasm.i32, wasm.i32, wasm.i32, wasm.i32, wasm.i32],
   [wasm.i32], { comp: "for-each" },
   function (coll, accum, start_idx, end_idx, func) {
+    const out = this.local(wasm.i32);
     return [
       wasm.local$get, ...coll,
       wasm.local$get, ...accum,
+      wasm.call, ...inc_refs.uleb128,
       wasm.local$get, ...start_idx,
       wasm.call, ...types.Int.fields.value.uleb128,
       wasm.i32$wrap_i64,
       wasm.local$get, ...end_idx,
+      wasm.local$get, ...start_idx,
       wasm.call, ...types.Int.fields.value.uleb128,
       wasm.i32$wrap_i64,
       wasm.local$get, ...func,
-      wasm.call, ...for_each.uleb128
+      wasm.call, ...for_each.uleb128,
+      wasm.local$tee, ...out,
+      wasm.local$get, ...out,
+      wasm.local$get, ...accum,
+      wasm.i32$eq,
+      wasm.if, wasm.void,
+        wasm.local$get, ...accum,
+        wasm.call, ...free.uleb128,
+      wasm.end
     ];
   }
 );

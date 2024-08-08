@@ -84,11 +84,6 @@
       (comp/for-each coll (comp/array (comp/count coll)) 0 -1
         (comp/fn (el arr i _) (f)
           (comp/array-set arr i (f el)))))))
-          ;(comp/let (val (f el))
-          ;  (comp/do
-          ;(comp/array-set arr i val)
-          ;(comp/print-refs val)
-          ;arr)))))))
 
 ;; compile
 (comp/compile)
@@ -196,21 +191,18 @@
   (comp/fn (form _) ()
     (comp/let (cnt (comp/count form))
       (comp/if (i64/gt_u cnt 0)
-        (comp/let (accum (comp/array (i64/add cnt 1)))
-          (comp/to-seq
-            (comp/for-each form
-              (comp/array-set accum 0 'comp/list) 0 -1
-              (comp/fn (el accum i _) ()
-                (comp/let
-                  (el (comp/if
-                        (comp/if (comp.Seq/instance el)
-                          (comp/if (comp/eq (comp/first el) 'comp/unquote)
-                            true
-                            nil)
-                          nil)
-                        (comp/nth el 1 nil)
-                        (comp/syntax-quote el)))
-                  (comp/array-set accum (i64/add i 1) el))))))
+        (comp/cons 'comp/list
+          (comp/map!
+            (comp/fn (el _) ()
+              (comp/if
+                (comp/if (comp.Seq/instance el)
+                  (comp/if (comp/eq (comp/first el) 'comp/unquote)
+                    true
+                    nil)
+                  nil)
+                (comp/nth el 1 nil)
+                (comp/syntax-quote el)))
+            form))
        ()))))
 
 (comp/impl comp/syntax-quote Vector
@@ -361,6 +353,8 @@
 (comp/pr (comp/concat-str "a" "b"))
 (comp/pr [1 2 3])
 (comp/pr '(1 2 3))
+(comp/pr (comp/cons 1 ()))
+(comp/pr (comp/cons 1 (comp/list 2 3 4)))
 (comp/pr (comp/map! (comp/fn (x _) () (i64/add x 1)) [4 5 6]))
 
 (comp/impl comp/expand-form Symbol
