@@ -3183,7 +3183,7 @@ const read_refs = funcs.build(
       wasm.i32$add,
       wasm.atomic$prefix,
       wasm.i32$atomic$load, 2, 0,
-      wasm.i32$const, ...sleb128i32(0x3fffffff), // strip first three bits
+      wasm.i32$const, ...sleb128i32(0x3fffffff), // strip first two bits
       wasm.i32$and
     ];
   }
@@ -3202,7 +3202,7 @@ function impl_free (type, free_self) {
       wasm.atomic$prefix,
       // atomically subtract 1 from refs, returns previous value:
       wasm.i32$atomic$rmw$sub, 2, 0,
-      // strip first three bits (used for local free)
+      // strip first two bits (used for local free)
       wasm.i32$const, ...sleb128i32(0x3fffffff),
       wasm.i32$and,
       wasm.i32$eqz,
@@ -5601,6 +5601,7 @@ const hash_bytes = funcs.build(
       wasm.local$get, ...len,
       wasm.i32$const, 3,
       wasm.i32$and,
+      wasm.local$tee, ...rem,
       wasm.if, wasm.void,
         wasm.local$get, ...hsh,
         wasm.local$get, ...str,
@@ -5608,7 +5609,21 @@ const hash_bytes = funcs.build(
         wasm.call, ...get_string_i32.uleb128,
         // file will continue past last byte,
         // while string is zero filled
-        wasm.i32$const, 3,
+        wasm.local$get, ...rem,
+        wasm.i32$const, 1,
+        wasm.i32$eq,
+        wasm.if, wasm.i32,
+          wasm.i32$const, ...sleb128i32(2**8-1),
+        wasm.else,
+          wasm.local$get, ...rem,
+          wasm.i32$const, 2,
+          wasm.i32$eq,
+          wasm.if, wasm.i32,
+            wasm.i32$const, ...sleb128i32(2**16-1),
+          wasm.else,
+            wasm.i32$const, ...sleb128i32(2**24-1),
+          wasm.end,
+        wasm.end,
         wasm.i32$and,
         wasm.call, ...m3_mix_k.uleb128,
         wasm.local$set, ...hsh,
@@ -6495,13 +6510,13 @@ map_node_assoc.implement(types.HashCollisionNode, function (
         wasm.call, ...types.HashCollisionNode.constr.uleb128,
       wasm.end,
     wasm.else,
-      wasm.local$get, ...hsh2,
-      wasm.local$get, ...shift,
       wasm.i32$const, 1,
       wasm.call, ...refs_array_by_length.uleb128,
       wasm.i32$const, 0,
       wasm.local$get, ...node,
       wasm.call, ...refs_array_set.uleb128,
+      wasm.local$get, ...hsh2,
+      wasm.local$get, ...shift,
       wasm.call, ...bitpos.uleb128,
       wasm.call, ...types.PartialNode.constr.uleb128,
       wasm.local$tee, ...node,
