@@ -6,6 +6,10 @@
 
 (comp/defmethod :comp/to-str 2 nil)
 
+(comp/defmethod :comp/namespace 2 nil)
+
+(comp/defmethod :comp/name 2 nil)
+
 (comp/defmethod :comp/to-sym 2 nil)
 
 (comp/defmethod :comp/syntax-quote 2
@@ -26,6 +30,37 @@
   (comp/fn (x _) ()
     (comp/call-mtd comp/to-str x comp/to-str)))
 
+;; todo: should be comp.Symbol
+(comp/impl comp/namespace Symbol
+  (comp/fn (sym _) ()
+    (comp/inc-refs-if-external sym
+      (comp.Symbol/namespace sym))))
+
+(comp/impl comp/namespace Keyword
+  (comp/fn (kw _) ()
+    (comp/inc-refs-if-external kw
+      (comp.Keyword/namespace kw))))
+
+(comp/impl comp/name Symbol
+  (comp/fn (sym _) ()
+    (comp/inc-refs-if-external sym
+      (comp.Symbol/name sym))))
+
+(comp/impl comp/name Keyword
+  (comp/fn (kw _) ()
+    (comp/inc-refs-if-external kw
+      (comp.Keyword/name kw))))
+
+(comp/def :comp/key
+  (comp/fn (leaf _) ()
+    (comp/inc-refs-if-external leaf
+      (comp.LeafNode/key leaf))))
+
+(comp/def :comp/val
+  (comp/fn (leaf _) ()
+    (comp/inc-refs-if-external leaf
+      (comp.LeafNode/val leaf))))
+
 ;; todo: throw if namespaced
 (comp/def :comp/store-alias
   (comp/fn (alias sym _) ()
@@ -42,14 +77,14 @@
 (comp/impl comp/to-sym Keyword
   (comp/fn (kw _) ()
     (comp/symbol
-      (comp.Symbol/namespace kw)
-      (comp.Symbol/name kw))))
+      (comp/namespace kw)
+      (comp/name kw))))
 
 (comp/def :comp/store-ns-alias
   (comp/fn (alias _) ()
     (comp/let
-      (ns (comp.Symbol/name (comp/first (comp/deref comp/curr-ns)))
-       full (comp/symbol ns (comp.Symbol/name alias)))
+      (ns (comp/name (comp/first (comp/deref comp/curr-ns)))
+       full (comp/symbol ns (comp/name alias)))
       (comp/do
         (comp/store-alias alias full)
         (comp/store-alias full full)))))
@@ -73,8 +108,8 @@
   (comp/fn (string substring _) ()
     (comp/string-matches-at string substring
       (i64/sub
-        (comp.String/length string)
-        (comp.String/length substring)))))
+        (comp/count string)
+        (comp/count substring)))))
 
 (comp/def* :comp/special-forms (comp/atom {}))
 
@@ -112,13 +147,13 @@
 
 (comp/impl comp/to-str Int
   (comp/fn (i _) ()
-    (comp/i64->string (comp.Int/value i))))
+    (comp/i64->string i)))
 
 (comp/impl comp/to-str Symbol
   (comp/fn (sym _) ()
     (comp/let
-      (ns (comp.Symbol/namespace sym)
-       nm (comp.Symbol/name sym))
+      (ns (comp/namespace sym)
+       nm (comp/name sym))
       (comp/if ns
         (comp/concat-str ns
           (comp/concat-str "/" nm))
@@ -127,8 +162,8 @@
 (comp/impl comp/to-str Keyword
   (comp/fn (sym _) ()
     (comp/let
-      (ns (comp.Keyword/namespace sym)
-       nm (comp.Keyword/name sym))
+      (ns (comp/namespace sym)
+       nm (comp/name sym))
       (comp/concat-str ":"
         (comp/if ns
           (comp/concat-str ns
@@ -158,9 +193,9 @@
         (comp/for-each m "{" 0 -1
           (comp/fn (kv accum i _) (n)
             (comp/let
-              (k (comp/pr-str (comp.LeafNode/key kv))
+              (k (comp/pr-str (comp/key kv))
                accum (comp/concat-str (comp/concat-str accum k) " ")
-               v (comp/pr-str (comp.LeafNode/val kv))
+               v (comp/pr-str (comp/val kv))
                accum (comp/concat-str accum v))
               (comp/if (i64/lt_u i n)
                 (comp/concat-str accum " ")
@@ -214,15 +249,15 @@
 (comp/impl comp/syntax-quote Symbol
   (comp/fn (sym _) ()
     (comp/let
-      (ns (comp.Symbol/namespace sym)
+      (ns (comp/namespace sym)
        ns (comp/if ns (comp/force-to-string ns) ns)
-       nm (comp/force-to-string (comp.Symbol/name sym))
+       nm (comp/force-to-string (comp/name sym))
        nm (comp/if ns nm
             (comp/if (comp/string-ends-with nm "#")
               (comp/concat-str
                 (comp/concat-str
                   (comp/substring-until nm 0
-                    (i64/sub (comp.String/length nm) 1))
+                    (i64/sub (comp/count nm) 1))
                   "__gensym__")
                 (comp/to-str (comp/deref comp/gensym-counter)))
               nm)))
@@ -268,7 +303,7 @@
   (comp/assoc (comp/deref comp/special-forms) 'defspecial
     (comp/fn (form env _) ()
       (comp/let
-        (nm (comp.Symbol/name (comp/nth form 1 nil))
+        (nm (comp/name (comp/nth form 1 nil))
          fn (comp/nth form 2 nil))
         (comp/call-mtd comp/expand-form
          `(comp/do (comp/compile)
@@ -320,7 +355,7 @@
 
 (defspecial def
   (comp/fn (form env _) ()
-    (comp/let (nm (comp.Symbol/name (comp/nth form 1 nil)))
+    (comp/let (nm (comp/name (comp/nth form 1 nil)))
       (comp/list 'comp/do (comp/list 'comp/compile)
         (comp/list 'comp/store-ns-alias (comp/list 'comp/symbol nil nm))
         (comp/list 'comp/let
@@ -332,8 +367,8 @@
                 nil)
               'kw
               (comp/list 'comp/keyword
-                (comp/list 'comp.Symbol/namespace 'full)
-                (comp/list 'comp.Symbol/name 'full))))
+                (comp/list 'comp/namespace 'full)
+                (comp/list 'comp/name 'full))))
           (comp/list 'comp/def 'kw
             (comp/call-mtd comp/expand-form
               (comp/nth args 2 nil) env)))))))
@@ -360,7 +395,7 @@
 (comp/impl comp/expand-form Symbol
   (comp/fn (s env) ()
     ;; todo: why inc-refs necessary?
-    (comp/let (ns (comp/inc-refs (comp.Symbol/namespace s)))
+    (comp/let (ns (comp/inc-refs (comp/namespace s)))
       (comp/if (comp/eq ns "i64")
         s
         (comp/let (ss (comp/get env s nil))
@@ -378,8 +413,8 @@
     (comp/for-each form {} 0 -1
       (comp/fn (kv accum n _) ()
         (comp/list 'comp/assoc accum
-          (comp.LeafNode/key kv)
-          (comp.LeafNode/val kv))))))
+          (comp/key kv)
+          (comp/val kv))))))
 
 (comp/compile)
 

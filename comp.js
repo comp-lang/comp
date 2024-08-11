@@ -1401,6 +1401,7 @@ const end_func = import_func(
   1, 0, 0, [wasm.i32],
   function (idx) {
     const out = func(open_funcs[idx]);
+	  //if (out.func_idx === 1251) print_code(idx);
     open_funcs[idx] = next_func_idx;
     next_func_idx = idx;
     return out.func_idx;
@@ -2596,15 +2597,15 @@ define_type(
   "String", 1,
   "refs", "i32", 1, refs_default, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
-  "arr", "i32", 0, 0, wasm.i32, 1,
-  "length", "i32", 0, 0, wasm.i64, 1
+  "arr", "i32", 0, 0, 0, 1,
+  "length", "i32", 0, 0, 0, 1
 );
 
 define_type(
   "File", 1,
   "refs", "i32", 1, refs_default, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
-  "fd", "i32", 0, 0, wasm.i64, 1,
+  "fd", "i32", 0, 0, 0, 1,
   "length", "i32", 0, 0, 0, 0,
 );
 
@@ -2621,8 +2622,8 @@ define_type(
   "Exception", 0,
   "refs", "i32", 1, refs_default, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
-  "data", "i32", 0, 0, wasm.i32, 0,
-  "msg", "i32", 0, 0, wasm.i32, 1
+  "data", "i32", 0, 0, 0, 0,
+  "msg", "i32", 0, 0, 0, 1
 );
 
 define_type(
@@ -2645,13 +2646,13 @@ define_type(
   "Function", 1,
   "refs", "i32", 1, refs_default, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
-  "func_num", "i32", 0, 0, wasm.i64, 1,
+  "func_num", "i32", 0, 0, 0, 1,
   "tbl_idx", "i32", 0, 0, 0, 0,
   "type_num", "i32", 0, 0, 0, 0,
-  "result",  "i32", 0, 0, wasm.i64, 0,
-  "i32_params", "i32", 0, 0, wasm.i64, 0,
-  "i64_params", "i32", 0, 0, wasm.i64, 0,
-  "f64_params", "i32", 0, 0, wasm.i64, 0,
+  "result",  "i32", 0, 0, 0, 0,
+  "i32_params", "i32", 0, 0, 0, 0,
+  "i64_params", "i32", 0, 0, 0, 0,
+  "f64_params", "i32", 0, 0, 0, 0,
   "scope", "i32", 0, 0, 0, 0
 );
 
@@ -2659,8 +2660,8 @@ define_type(
   "VariadicFunction", 0,
   "refs", "i32", 1, refs_default, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
-  "func", "i32", 0, 0, wasm.i32, 0,
-  "args", "i32", 0, 0, wasm.i32, 0
+  "func", "i32", 0, 0, 0, 0,
+  "args", "i32", 0, 0, 0, 0
 );
 
 define_type(
@@ -2669,7 +2670,7 @@ define_type(
   "hash", "i32", 1, 0, 0, 0,
   "num", "i32", 0, 0, 0, 0,
   "default_func", "i32", 0, 0, 0, 0,
-  "main_func", "i32", 0, 0, wasm.i32, 0
+  "main_func", "i32", 0, 0, 0, 0
 );
 
 define_type(
@@ -2677,7 +2678,7 @@ define_type(
   "refs", "i32", 1, refs_default, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "arr", "i32", 0, 0, 0, 1,
-  "length", "i32", 0, 0, wasm.i64, 1,
+  "length", "i32", 0, 0, 0, 1,
   "original", "i32", 0, 0, 0, 0
 );
 
@@ -2700,16 +2701,16 @@ define_type(
   "TaggedData", 0,
   "refs", "i32", 1, refs_default, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
-  "tag", "i32", 0, 0, wasm.i32, 0,
-  "data", "i32", 0, 0, wasm.i32, 0
+  "tag", "i32", 0, 0, 0, 0,
+  "data", "i32", 0, 0, 0, 0
 );
 
 define_type(
   "Metadata", 0,
   "refs", "i32", 1, refs_default, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
-  "meta", "i32", 0, 0, wasm.i32, 0,
-  "data", "i32", 0, 0, wasm.i32, 0
+  "meta", "i32", 0, 0, 0, 0,
+  "data", "i32", 0, 0, 0, 0
 );
 
 define_type(
@@ -2755,14 +2756,14 @@ define_type(
   "refs", "i32", 1, refs_default, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
   "root", "i32", 0, 0, 0, 0,
-  "count", "i32", 0, 0, wasm.i64, 0
+  "count", "i32", 0, 0, 0, 0
 );
 
 define_type(
   "Vector", 1,
   "refs", "i32", 1, refs_default, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
-  "count", "i32", 0, 0, wasm.i64, 0,
+  "count", "i32", 0, 0, 0, 0,
   "shift", "i32", 0, 0, 0, 0,
   "root", "i32", 0, 0, 0, 0,
   "tail", "i32", 0, 0, 0, 0
@@ -2774,7 +2775,7 @@ define_type(
   "hash", "i32", 1, 0, 0, 0,
   "arr", "i32", 0, 0, 0, 0,
   "arr_off", "i32", 0, 0, 0, 0,
-  "vec", "i32", 0, 0, wasm.i32, 0,
+  "vec", "i32", 0, 0, 0, 0,
   "node_off", "i32", 0, 0, 0, 0
 );
 
@@ -2799,7 +2800,7 @@ define_type(
   "HashMapSeq", 0,
   "refs", "i32", 1, refs_default, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
-  "map", "i32", 0, 0, wasm.i32, 0,
+  "map", "i32", 0, 0, 0, 0,
   "root", "i32", 0, 0, 0, 0
 );
 
@@ -2832,7 +2833,7 @@ define_type(
   "Seq", 1,
   "refs", "i32", 1, refs_default, 0, 0,
   "hash", "i32", 1, 0, 0, 0,
-  "root", "i32", 0, 0, wasm.i32, 0
+  "root", "i32", 0, 0, 0, 0
 );
 
 /*-----*\
@@ -8151,7 +8152,7 @@ const local_free_is_derived = funcs.build(
 );
 
 const inc_refs_if_external_local = funcs.build(
-  [wasm.i32, wasm.i32], [wasm.i32], {},
+  [wasm.i32, wasm.i32], [wasm.i32], { comp: "inc-refs-if-external" },
   function (src, dst) {
     return [
       wasm.local$get, ...src,
@@ -9732,6 +9733,7 @@ const comp_func_set_params = funcs.build(
   function (outer_func, inner_func, params, scope, outer_env, inner_env) {
     const curr_param = this.local(wasm.i32),
           curr_type = this.local(wasm.i32),
+          loc_num = this.local(wasm.i32),
           param_count = this.local(wasm.i32),
           param_index = this.local(wasm.i32),
           result = this.local(wasm.i32),
@@ -9770,7 +9772,10 @@ const comp_func_set_params = funcs.build(
             wasm.local$get, ...param_index,
             wasm.i64$extend_i32_u,
             wasm.call, ...types.Int.constr.uleb128,
+            wasm.local$tee, ...loc_num,
             wasm.call, ...assoc.uleb128,
+            wasm.local$get, ...loc_num,
+            wasm.call, ...free.uleb128,
             wasm.local$tee, ...inner_env,
             wasm.local$get, ...inner_func,
             wasm.i32$const, 0,
@@ -9868,7 +9873,10 @@ const comp_func_add_local = funcs.build(
       wasm.local$get, ...local_idx,
       wasm.i64$extend_i32_u,
       wasm.call, ...types.Int.constr.uleb128,
-      wasm.call, ...assoc.uleb128
+      wasm.local$tee, ...local_idx,
+      wasm.call, ...assoc.uleb128,
+      wasm.local$get, ...local_idx,
+      wasm.call, ...free.uleb128
     ];
   }
 );
@@ -9879,33 +9887,16 @@ const emit_func_call = funcs.build(
   function (func, env, head, args, is_mtd) {
     const cnt = this.local(wasm.i32),
           idx = this.local(wasm.i32),
+          inner_env = this.local(wasm.i32),
+          temp_env = this.local(wasm.i32),
           func_record = this.local(wasm.i32),
+          i32_cnt = this.local(wasm.i32),
+          i64_cnt = this.local(wasm.i32),
+          f64_cnt = this.local(wasm.i32),
           func_local = this.local(wasm.i32),
           result = this.local(wasm.i32),
           func_num = this.local(wasm.i32);
     return [
-      wasm.local$get, ...args,
-      wasm.call, ...count.uleb128,
-      wasm.local$set, ...cnt,
-      wasm.loop, wasm.void,
-        wasm.local$get, ...idx,
-        wasm.local$get, ...cnt,
-        wasm.i32$lt_u,
-        wasm.if, wasm.void,
-          wasm.local$get, ...args,
-          wasm.local$get, ...idx,
-          wasm.i32$const, nil,
-          wasm.call, ...nth.uleb128,
-          wasm.local$get, ...func,
-          wasm.local$get, ...env,
-          wasm.call, ...emit_code.uleb128,
-          wasm.local$get, ...idx,
-          wasm.i32$const, 1,
-          wasm.i32$add,
-          wasm.local$set, ...idx,
-          wasm.br, 1,
-        wasm.end,
-      wasm.end,
       wasm.local$get, ...head,
       wasm.call, ...types.Symbol.pred.uleb128,
       wasm.if, wasm.i32,
@@ -9919,11 +9910,97 @@ const emit_func_call = funcs.build(
           wasm.local$get, ...head,
           wasm.call, ...sym_to_kw.uleb128,
           wasm.call, ...lookup_global.uleb128,
-          wasm.local$tee, ...func_record,
         wasm.end,
       wasm.else,
         wasm.i32$const, 0,
       wasm.end,
+      wasm.local$tee, ...func_record,
+      wasm.if, wasm.void,
+        wasm.local$get, ...func_record,
+        wasm.call, ...types.Function.fields.i32_params.uleb128,
+        wasm.local$set, ...i32_cnt,
+        wasm.local$get, ...func_record,
+        wasm.call, ...types.Function.fields.i64_params.uleb128,
+        wasm.local$set, ...i64_cnt,
+        wasm.local$get, ...func_record,
+        wasm.call, ...types.Function.fields.f64_params.uleb128,
+        wasm.local$set, ...f64_cnt,
+      wasm.end,
+      wasm.local$get, ...args,
+      wasm.call, ...count.uleb128,
+      wasm.local$tee, ...cnt,
+      wasm.if, wasm.void,
+        wasm.local$get, ...env,
+        wasm.local$set, ...inner_env,
+        wasm.loop, wasm.void,
+          wasm.local$get, ...idx,
+          wasm.local$get, ...cnt,
+          wasm.i32$lt_u,
+          wasm.if, wasm.void,
+            wasm.local$get, ...args,
+            wasm.local$get, ...idx,
+            wasm.i32$const, nil,
+            wasm.call, ...nth.uleb128,
+            wasm.local$get, ...func,
+            wasm.local$get, ...i32_cnt,
+            wasm.if, wasm.i32,
+              wasm.local$get, ...i32_cnt,
+              wasm.i32$const, 1,
+              wasm.i32$sub,
+              wasm.local$set, ...i32_cnt,
+              wasm.local$get, ...inner_env,
+            wasm.else,
+              wasm.local$get, ...i64_cnt,
+              wasm.if, wasm.i32,
+                wasm.local$get, ...i64_cnt,
+                wasm.i32$const, 1,
+                wasm.i32$sub,
+                wasm.local$set, ...i64_cnt,
+                wasm.local$get, ...inner_env,
+                wasm.i32$const, ...sleb128i32(make_keyword("is-num64")),
+                wasm.i32$const, ...sleb128i32(comp_true),
+                wasm.call, ...assoc.uleb128,
+              wasm.else,
+                wasm.local$get, ...f64_cnt,
+                wasm.if, wasm.i32,
+                  wasm.local$get, ...f64_cnt,
+                  wasm.i32$const, 1,
+                  wasm.i32$sub,
+                  wasm.local$set, ...f64_cnt,
+                  wasm.local$get, ...inner_env,
+                  wasm.i32$const, ...sleb128i32(make_keyword("is-num64")),
+                  wasm.i32$const, ...sleb128i32(comp_false),
+                  wasm.call, ...assoc.uleb128,
+                wasm.else,
+                  wasm.local$get, ...inner_env,
+                wasm.end,
+              wasm.end,
+            wasm.end,
+            wasm.local$tee, ...temp_env,
+            wasm.call, ...emit_code.uleb128,
+            wasm.local$get, ...temp_env,
+            wasm.local$get, ...inner_env,
+            wasm.i32$ne,
+            wasm.if, wasm.void,
+              wasm.local$get, ...inner_env,
+              wasm.local$get, ...env,
+              wasm.i32$ne,
+              wasm.if, wasm.void,
+                wasm.local$get, ...inner_env,
+                wasm.call, ...free.uleb128,
+              wasm.end,
+              wasm.local$get, ...temp_env,
+              wasm.local$set, ...inner_env,
+            wasm.end,
+            wasm.local$get, ...idx,
+            wasm.i32$const, 1,
+            wasm.i32$add,
+            wasm.local$set, ...idx,
+            wasm.br, 1,
+          wasm.end,
+        wasm.end,
+      wasm.end,
+      wasm.local$get, ...func_record,
       wasm.if, wasm.void,
         wasm.local$get, ...func_record,
         wasm.call, ...types.Method.pred.uleb128,
@@ -11220,7 +11297,6 @@ const emit_code_num64 = funcs.build(
           wasm.call, ...eq.uleb128,
           wasm.i32$or,
           wasm.if, wasm.i32,
-            // prevent prematurely freeing original args
             wasm.local$get, ...args,
             wasm.call, ...count.uleb128,
             wasm.local$set, ...cnt,
