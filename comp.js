@@ -3193,6 +3193,22 @@ const read_refs = funcs.build(
 const free = pre_new_method(1, 0, 0, 0, { export: "free" }),
       free_indirect = add_to_func_table(free.func_idx);
 
+// todo: will need in many other places (esp for maps that might not change)
+const free_if_not_eq = funcs.build(
+  [wasm.i32, wasm.i32], [], {},
+  function (a, b) {
+    return [
+      wasm.local$get, ...a,
+      wasm.local$get, ...b,
+      wasm.i32$ne,
+      wasm.if, wasm.void,
+        wasm.local$get, ...a,
+        wasm.call, ...free.uleb128,
+      wasm.end,
+    ];
+  }
+);
+
 function impl_free (type, free_self) {
   return free.implement(type, function (val) {
     return [
@@ -4816,6 +4832,8 @@ const concat_str = funcs.build(
       wasm.call, ...count.uleb128,
       wasm.local$tee, ...len1,
       wasm.local$get, ...str2,
+      //wasm.call, ...force_to_string.uleb128,
+      //wasm.local$tee, ...str2,
       wasm.call, ...count.uleb128,
       wasm.local$tee, ...len2,
       wasm.call, ...safe_add_i32.uleb128,
@@ -8294,8 +8312,9 @@ compile();
 
 const comp_types = new_atom(empty_vector);
 
-for (const type_name in types) {
+for (let type_name in types) {
   const type_info = types[type_name];
+  type_name = `comp.${type_name}`;
   let _ts = comp.atom_swap_lock(comp_types);
   const type = comp.Type(type_info.type_num);
   let ts = comp.conj(_ts, type);
@@ -8305,7 +8324,7 @@ for (const type_name in types) {
   const pred = pre_new_method(
     1, 0, 0, wasm.i32,
     {
-      comp: [`comp.${type_name}`, "instance"],
+      comp: [type_name, "instance"],
       comp_wrapper: [wrap_result_i32_to_bool]
     },
     () => [wasm.i32$const, 0]
@@ -10823,24 +10842,6 @@ def_special_form("loop", function (func, forms, env) {
   ];
 });
 
-const to_bool_i32 = funcs.build(
-  [wasm.i32], [wasm.i32], {},
-  function (val) {
-    return [
-      wasm.local$get, ...val,
-      //wasm.i32$const, ...sleb128i32(comp_false),
-      //wasm.i32$eq,
-      wasm.if, wasm.i32,
-        wasm.i32$const, ...sleb128i32(comp_true),
-      wasm.else,
-        wasm.i32$const, 0,
-        // nil is zero, so no other check needed
-        //wasm.local$get, ...val,
-      wasm.end
-    ];
-  }
-);
-
 def_special_form("if", function (func, forms, env) {
   const result1 = this.local(wasm.i32),
         result2 = this.local(wasm.i32);
@@ -10854,10 +10855,6 @@ def_special_form("if", function (func, forms, env) {
     wasm.call, ...emit_code.uleb128,
     wasm.drop,
     wasm.local$get, ...func,
-    wasm.i32$const, ...sleb128i32(wasm.call),
-    wasm.call, ...append_code.uleb128,
-    wasm.i32$const, ...to_bool_i32.sleb128,
-    wasm.call, ...append_varuint32.uleb128,
     wasm.i32$const, ...sleb128i32(wasm.if),
     wasm.call, ...append_code.uleb128,
 // todo: allow i64/f64 return
@@ -11255,6 +11252,10 @@ const is_num64_bool_op = funcs.build(
       wasm.i32$const, ...sleb128i32(cached_string("eq")),
       wasm.call, ...eq.uleb128,
       wasm.local$get, ...op,
+      wasm.i32$const, ...sleb128i32(cached_string("eqz")),
+      wasm.call, ...eq.uleb128,
+      wasm.i32$or,
+      wasm.local$get, ...op,
       wasm.i32$const, ...sleb128i32(cached_string("lt_u")),
       wasm.call, ...eq.uleb128,
       wasm.i32$or,
@@ -11278,6 +11279,7 @@ const emit_code_num64 = funcs.build(
           is_i64 = this.local(wasm.i32),
           cnt = this.local(wasm.i32),
           idx = this.local(wasm.i32),
+		  op = this.local(wasm.i32),
           inner_env = this.local(wasm.i32);
     return [
       wasm.local$get, ...head,
@@ -11331,7 +11333,8 @@ const emit_code_num64 = funcs.build(
               wasm.end,
             wasm.end,
             wasm.local$get, ...inner_env,
-            wasm.call, ...free.uleb128,
+            wasm.local$get, ...env,
+            wasm.call, ...free_if_not_eq.uleb128,
             wasm.local$get, ...func,
             wasm.local$get, ...ns,
 // todo: comp_string_to_js method for FileSlice/String
@@ -12593,7 +12596,6 @@ const parse_list = funcs.build(
   }
 );
 
-// todo: reimplement parse_vector and parse_map in comp
 const parse_vector = funcs.build(
   [wasm.i32, wasm.i32, wasm.i32],
   [wasm.i32, wasm.i32, wasm.i32], {},
