@@ -15,14 +15,14 @@
 (comp/defmethod :comp/syntax-quote 2
   (comp/fn (x _) () x))
 
-(comp/defmethod :comp/get-scope 5
-  (comp/fn (x scope inner-env outer-env _) ()
-    scope))
+(comp/defmethod :comp/get-scope 4
+  (comp/fn (x scope env _) () scope))
 
 (comp/def :comp/curr-ns (comp/atom (comp/list "comp.core")))
 
 (comp/def :comp/aliases (comp/atom {}))
 
+;; todo: make def special form so we don't need to compile
 ;; compile
 (comp/compile)
 
@@ -344,18 +344,16 @@
 (comp/compile)
 
 (comp/impl comp/get-scope comp.Symbol
-  (comp/fn (sym scope inner-env outer-env _) ()
-    (comp/if (comp/get inner-env sym nil)
+  (comp/fn (sym scope env _) ()
+    (comp/if (comp/get env sym nil)
       scope
-      (comp/if (comp/get outer-env sym nil)
-        (comp/conj scope sym)
-        scope))))
+      (comp/conj scope sym))))
 
 (comp/impl comp/get-scope comp.Seq
-  (comp/fn (seq scope inner-env outer-env _) ()
+  (comp/fn (seq scope env _) ()
     (comp/for-each seq scope 0 -1
-      (comp/fn (x scope i _) (inner-env outer-env)
-        (comp/get-scope x scope inner-env outer-env)))))
+      (comp/fn (x scope i _) (env)
+        (comp/get-scope x scope env)))))
 
 ;(comp/def* :comp/is-wasm-num
 ;  (comp/fn (form _) ()
@@ -491,6 +489,28 @@
               nil)
            ~(comp/nth form 2 nil)))))))
 
+(comp/defmacro fn
+  (comp/fn (form _) ()
+    (comp/let
+      (nm (comp/nth form 1 nil)
+       nm (comp/if (comp.Symbol/instance nm) nm nil)
+       params (comp/nth form (comp/if nm 2 1) nil)
+       params (comp/to-seq (comp/conj params nm))
+       body (comp/nth form (comp/if nm 3 2) nil)
+       scope-env
+         (comp/for-each params {} 0 -1
+           (comp/fn (param env i _) ()
+             (comp/assoc env param param)))
+       scope (comp/get-scope body [] scope-env))
+       ;env (comp/for-each scope scope-env 0 -1
+       ;      (comp/fn (sym env i _) ()
+       ;        (comp/assoc env sym sym))))
+     `(comp/fn ~params ~(comp/to-seq scope) ~body))))
+
+;(comp.core/def add (comp.core/fn [x] (i64/add x 1)))
+;
+;(comp/pr (comp.core/add 2))
+;
 (comp/impl comp/expand-form comp.Symbol
   (comp/fn (s env) ()
     (comp/let (ns (comp/namespace s))
