@@ -2064,7 +2064,7 @@ const alloc = funcs.build(
       wasm.local$get, ...type_size,
       wasm.i32$const, 0,
       wasm.atomic$prefix,
-      // replace address with zero so other threads will use get_next_address
+      // replace address with zero so other threads will use get_next_address until done
       wasm.i32$atomic$rmw$xchg, 2, 0,
       wasm.local$tee, ...addr,
       // above returns value in type_addr
@@ -3148,7 +3148,7 @@ const read_refs = funcs.build(
       wasm.i32$add,
       wasm.atomic$prefix,
       wasm.i32$atomic$load, 2, 0,
-      wasm.i32$const, ...sleb128i32(0x3fffffff), // strip first two bits
+      wasm.i32$const, ...sleb128i32(0x1fffffff), // strip first three bits
       wasm.i32$and
     ];
   }
@@ -3183,8 +3183,8 @@ function impl_free (type, free_self) {
       wasm.atomic$prefix,
       // atomically subtract 1 from refs, returns previous value:
       wasm.i32$atomic$rmw$sub, 2, 0,
-      // strip first two bits (used for local free)
-      wasm.i32$const, ...sleb128i32(0x3fffffff),
+      // strip first three bits (used for local free)
+      wasm.i32$const, ...sleb128i32(0x1fffffff),
       wasm.i32$and,
       wasm.i32$eqz,
       wasm.if, wasm.void,
@@ -8634,6 +8634,69 @@ const comp_atom = funcs.build(
     ];
   }
 );
+
+const namespace = new_method(1, wasm.i32, { comp: "namespace" });
+
+function get_namespace (sym) {
+  const ns = this.local(wasm.i32);
+  return [
+    wasm.local$get, ...sym,
+    wasm.call, ...types.Symbol.fields.namespace.uleb128,
+    wasm.local$tee, ...ns,
+    wasm.if, wasm.i32,
+      wasm.local$get, ...sym,
+      wasm.local$get, ...ns,
+      wasm.call, ...inc_refs_if_external_local.uleb128,
+      wasm.call, ...force_to_string.uleb128,
+    wasm.else,
+      wasm.local$get, ...ns,
+    wasm.end
+  ];
+}
+
+namespace.implement(types.Symbol, get_namespace); 
+namespace.implement(types.Keyword, get_namespace); 
+
+const name = new_method(1, wasm.i32, { comp: "name" });
+
+function get_name (sym) {
+  return [
+    wasm.local$get, ...sym,
+    wasm.local$get, ...sym,
+    wasm.call, ...types.Symbol.fields.name.uleb128,
+    wasm.call, ...inc_refs_if_external_local.uleb128,
+    wasm.call, ...force_to_string.uleb128,
+  ];
+}
+
+name.implement(types.Symbol, get_name);
+name.implement(types.Keyword, get_name);
+
+const key = new_method(1, wasm.i32, { comp: "key" });
+
+function get_key (leaf) {
+  return [
+    wasm.local$get, ...leaf,
+    wasm.local$get, ...leaf,
+    wasm.call, ...types.LeafNode.fields.key.uleb128,
+    wasm.call, ...inc_refs_if_external_local.uleb128,
+  ];
+}
+
+key.implement(types.LeafNode, get_key);
+
+const val = new_method(1, wasm.i32, { comp: "val" });
+
+function get_val (leaf) {
+  return [
+    wasm.local$get, ...leaf,
+    wasm.local$get, ...leaf,
+    wasm.call, ...types.LeafNode.fields.val.uleb128,
+    wasm.call, ...inc_refs_if_external_local.uleb128,
+  ];
+}
+
+val.implement(types.LeafNode, get_val);
 
 // todo: why not store main_func and def_func as Functions?
 funcs.build(

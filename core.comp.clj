@@ -6,10 +6,6 @@
 
 (comp/defmethod :comp/to-str 2 nil)
 
-(comp/defmethod :comp/namespace 2 nil)
-
-(comp/defmethod :comp/name 2 nil)
-
 (comp/defmethod :comp/to-sym 2 nil)
 
 (comp/defmethod :comp/syntax-quote 2
@@ -30,44 +26,6 @@
   (comp/fn (x _) ()
     (comp/call-mtd comp/to-str x comp/to-str)))
 
-(comp/impl comp/namespace comp.Symbol
-  (comp/fn (sym _) ()
-    (comp/let (ns (comp.Symbol/namespace sym))
-      (comp/if ns
-        (comp/force-to-string
-          (comp/inc-refs-if-external sym ns))
-        ns))))
-
-(comp/impl comp/namespace comp.Keyword
-  (comp/fn (kw _) ()
-    (comp/let (ns (comp.Keyword/namespace kw))
-      (comp/if ns
-        (comp/force-to-string
-          (comp/inc-refs-if-external kw ns))
-        ns))))
-
-(comp/impl comp/name comp.Symbol
-  (comp/fn (sym _) ()
-    (comp/force-to-string
-      (comp/inc-refs-if-external sym
-        (comp.Symbol/name sym)))))
-
-(comp/impl comp/name comp.Keyword
-  (comp/fn (kw _) ()
-    (comp/force-to-string
-      (comp/inc-refs-if-external kw
-        (comp.Keyword/name kw)))))
-
-(comp/def :comp/key
-  (comp/fn (leaf _) ()
-    (comp/inc-refs-if-external leaf
-      (comp.LeafNode/key leaf))))
-
-(comp/def :comp/val
-  (comp/fn (leaf _) ()
-    (comp/inc-refs-if-external leaf
-      (comp.LeafNode/val leaf))))
-
 (comp/def :comp/store-alias
   (comp/fn (alias sym _) ()
     (comp/reset! comp/aliases
@@ -83,14 +41,14 @@
 (comp/impl comp/to-sym comp.Keyword
   (comp/fn (kw _) ()
     (comp/symbol
-      (comp/namespace kw)
-      (comp/name kw))))
+      (comp/call-mtd comp/namespace kw)
+      (comp/call-mtd comp/name kw))))
 
 (comp/def :comp/store-ns-alias
   (comp/fn (alias _) ()
     (comp/let
       (ns (comp/first (comp/deref comp/curr-ns))
-       full (comp/symbol ns (comp/name alias)))
+       full (comp/symbol ns (comp/call-mtd comp/name alias)))
       (comp/do
         (comp/store-alias alias full)
         (comp/store-alias full full)
@@ -102,7 +60,7 @@
       (comp/def nm val)
       (comp/store-alias nm nm)
       (comp/store-alias
-        (comp/symbol nil (comp/name nm))
+        (comp/symbol nil (comp/call-mtd comp/name nm))
         nm))))
 
 ;; compile
@@ -176,8 +134,8 @@
 (comp/impl comp/to-str comp.Symbol
   (comp/fn (sym _) ()
     (comp/let
-      (ns (comp/namespace sym)
-       nm (comp/name sym))
+      (ns (comp/call-mtd comp/namespace sym)
+       nm (comp/call-mtd comp/name sym))
       (comp/if ns
         (comp/concat-str ns
           (comp/concat-str "/" nm))
@@ -186,8 +144,8 @@
 (comp/impl comp/to-str comp.Keyword
   (comp/fn (sym _) ()
     (comp/let
-      (ns (comp/namespace sym)
-       nm (comp/name sym))
+      (ns (comp/call-mtd comp/namespace sym)
+       nm (comp/call-mtd comp/name sym))
       (comp/concat-str ":"
         (comp/if ns
           (comp/concat-str ns
@@ -217,9 +175,9 @@
         (comp/for-each m "{" 0 -1
           (comp/fn (kv accum i _) (n)
             (comp/let
-              (k (comp/pr-str (comp/key kv))
+              (k (comp/pr-str (comp/call-mtd comp/key kv))
                accum (comp/concat-str (comp/concat-str accum k) " ")
-               v (comp/pr-str (comp/val kv))
+               v (comp/pr-str (comp/call-mtd comp/val kv))
                accum (comp/concat-str accum v))
               (comp/if (i64/lt_u i n)
                 (comp/concat-str accum " ")
@@ -273,8 +231,8 @@
 (comp/impl comp/syntax-quote comp.Symbol
   (comp/fn (sym _) ()
     (comp/let
-      (ns (comp/namespace sym)
-       nm (comp/force-to-string (comp/name sym))
+      (ns (comp/call-mtd comp/namespace sym)
+       nm (comp/force-to-string (comp/call-mtd comp/name sym))
        gensym (comp/string-ends-with nm "#")
        nm (comp/if ns nm
             (comp/if gensym
@@ -473,8 +431,8 @@
     (comp/for-each form {} 0 -1
       (comp/fn (kv accum n _) ()
        `(comp/assoc ~accum
-         ~(comp/key kv)
-         ~(comp/val kv))))))
+         ~(comp/call-mtd comp/key kv)
+         ~(comp/call-mtd comp/val kv))))))
 
 ;; todo: throw if namespaced
 (comp/defmacro def
@@ -484,8 +442,8 @@
         (comp/do (comp/compile)
           (comp/def
             (comp/keyword
-              (comp/namespace nm#)
-              (comp/name nm#)
+              (comp/call-mtd comp/namespace nm#)
+              (comp/call-mtd comp/name nm#)
               nil)
            ~(comp/nth form 2 nil)))))))
 
@@ -513,7 +471,7 @@
 ;
 (comp/impl comp/expand-form comp.Symbol
   (comp/fn (s env) ()
-    (comp/let (ns (comp/namespace s))
+    (comp/let (ns (comp/call-mtd comp/namespace s))
       (comp/if (comp/eq ns "i64")
         s
         (comp/let (ss (comp/get env s nil))
