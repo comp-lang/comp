@@ -1713,20 +1713,15 @@ const js_get = import_func(
 );
 
 const js_call = import_func(
-  2, 0, 0, [wasm.i32],
-  function (obj_prop, arr) {
+  3, 0, 0, [wasm.i32],
+  function (obj_prop, start, len) {
     obj_prop = load_ref(obj_prop).split(".");
     // obj_prop = comp_string_to_js(obj_prop).split(".");
     let obj = js_imports;
     for (let i = 0; i < obj_prop.length; i++) {
       obj = obj[obj_prop[i]];
     }
-    const args = [],
-          len = comp.Array$length(arr);
-    for (let i = 0; i < len; i++) {
-      const obj = comp.to_js(comp.array_get_i32(arr, i));
-      args.push(load_ref(comp.Object$address(obj)));
-    }
+    const args = ref_table.slice(start, start + len);
     return comp.Object(store_ref(obj(...args)));
   }
 );
@@ -11602,27 +11597,46 @@ const emit_code_num64 = funcs.build(
   }
 );
 
-//function emit_list_to_array (list, each, func, env) {
-//  return [
-//    wasm.loop, wasm.void,
-//      wasm.local$get, ...list,
-//      wasm.i32$const, ...sleb128i32(empty_list),
-//      wasm.i32$ne,
-//      wasm.if, wasm.void,
-//        wasm.local$get, ...list,
-//        wasm.call, ...first.uleb128,
-//    wasm.i32.local$get, ...func,
-//  ];
-//}
+function emit_list_to_array (list, each, func, env) {
+  const idx = this.local(wasm.i32);
+  return [
+    wasm.loop, wasm.void,
+      wasm.local$get, ...list,
+      wasm.i32$const, ...sleb128i32(empty_list),
+      wasm.i32$ne,
+      wasm.if, wasm.void,
+        wasm.local$get, ...list,
+        wasm.call, ...first.uleb128,
+        wasm.local$get, ...func,
+        wasm.local$get, ...env,
+        wasm.call, ...emit_form.uleb128,
+        wasm.drop,
+        wasm.drop,
+        wasm.local$get, ...list,
+        wasm.call, ...rest.uleb128,
+        wasm.local$get, ...idx,
+        wasm.if, wasm.void,
+          wasm.local$get, ...list,
+          wasm.call, ...free.uleb128,
+        wasm.end,
+        wasm.local$set, ...list,
+        wasm.local$get, ...idx,
+        wasm.i32$const, 1,
+        wasm.i32$add,
+        wasm.local$set, ...idx,
+        wasm.br, 1,
+      wasm.end,
+    wasm.end,
+    wasm.i32.local$get, ...func,
+  ];
+}
 
 // todo: emit number directly in wasm math form?
 const emit_js_func_call = funcs.build(
   [wasm.i32, wasm.i32, wasm.i32, wasm.i32],
   [wasm.i32], {},
   function (head, args, func, env) {
-    const idx = this.local(wasm.i32),
-          cnt = this.local(wasm.i32),
-          arg = this.local(wasm.i32);
+    const idx = this.local(wasm.i32);
     return [
       wasm.local$get, ...head,
       wasm.call, ...types.Symbol.pred.uleb128,
@@ -11640,33 +11654,14 @@ const emit_js_func_call = funcs.build(
 // todo: comp_string_to_js method for FileSlice/String
           wasm.call, ...force_to_string.uleb128,
           wasm.call, ...store_string.uleb128,
-          wasm.call, ...append_varuint32.uleb128,
-          wasm.i32$const, ...sleb128i32(wasm.i32$const),
-          wasm.call, ...append_code.uleb128,
-          wasm.local$get, ...args,
-          wasm.call, ...count.uleb128,
-          wasm.local$tee, ...cnt,
-          wasm.call, ...append_varuint32.uleb128,
-          wasm.i32$const, ...sleb128i32(wasm.call),
-          wasm.call, ...append_code.uleb128,
-          wasm.i32$const, ...array_by_length.sleb128,
-          wasm.call, ...append_varuint32.uleb128,
+          wasm.call, ...append_varsint32.uleb128,
           wasm.loop, wasm.void,
-            wasm.local$get, ...idx,
-            wasm.local$get, ...cnt,
-            wasm.i32$lt_u,
+            wasm.local$get, ...args,
+            wasm.i32$const, ...sleb128i32(empty_seq),
+            wasm.i32$ne,
             wasm.if, wasm.void,
-              wasm.local$get, ...func,
-              wasm.i32$const, ...sleb128i32(wasm.i32$const),
-              wasm.call, ...append_code.uleb128,
-              wasm.local$get, ...idx,
-              wasm.call, ...append_varsint32.uleb128,
-              wasm.drop,
               wasm.local$get, ...args,
-              wasm.local$get, ...idx,
-              wasm.i32$const, nil,
-              wasm.call, ...nth.uleb128,
-              wasm.local$tee, ...arg,
+              wasm.call, ...first.uleb128,
               wasm.local$get, ...func,
               wasm.local$get, ...env,
               wasm.call, ...emit_code.uleb128,
@@ -11675,9 +11670,31 @@ const emit_js_func_call = funcs.build(
               wasm.local$get, ...func,
               wasm.i32$const, ...sleb128i32(wasm.call),
               wasm.call, ...append_code.uleb128,
-              wasm.i32$const, ...array_set_i32.sleb128,
+              wasm.i32$const, ...to_js.sleb128,
               wasm.call, ...append_varuint32.uleb128,
+              wasm.local$get, ...env,
+              wasm.i32$const, ...sleb128i32(wasm.i32),
+              wasm.call, ...stage_val_to_free.uleb128,
               wasm.drop,
+              wasm.local$get, ...args,
+              wasm.call, ...rest.uleb128,
+              wasm.local$get, ...idx,
+              wasm.if, wasm.void,
+                wasm.local$get, ...args,
+                wasm.call, ...free.uleb128,
+                wasm.local$get, ...func,
+                wasm.i32$const, ...sleb128i32(wasm.drop),
+                wasm.call, ...append_code.uleb128,
+                wasm.drop,
+              wasm.else,
+                wasm.local$get, ...func,
+                wasm.i32$const, ...sleb128i32(wasm.call),
+                wasm.call, ...append_code.uleb128,
+                wasm.i32$const, ...sleb128i32(types.Object.fields.address.func_idx),
+                wasm.call, ...append_varuint32.uleb128,
+                wasm.drop,
+              wasm.end,
+              wasm.local$set, ...args,
               wasm.local$get, ...idx,
               wasm.i32$const, 1,
               wasm.i32$add,
@@ -11685,6 +11702,10 @@ const emit_js_func_call = funcs.build(
               wasm.br, 1,
             wasm.end,
           wasm.end,
+          wasm.i32$const, ...sleb128i32(wasm.i32$const),
+          wasm.call, ...append_code.uleb128,
+          wasm.local$get, ...idx,
+          wasm.call, ...append_varsint32.uleb128,
           wasm.i32$const, ...sleb128i32(wasm.call),
           wasm.call, ...append_code.uleb128,
           wasm.i32$const, ...js_call.sleb128,
