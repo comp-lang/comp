@@ -413,6 +413,7 @@
 (comp/pr `a)
 (comp/pr `(a))
 (comp/pr `(1 (2 3)))
+(comp/pr (comp/eq 'a 'a))
 (comp/pr (comp/count "abc"))
 (comp/pr (comp/substring "abcd" 1 3))
 (comp/pr (comp/index-of-codepoint "abcd" 99))
